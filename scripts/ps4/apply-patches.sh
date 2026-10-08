@@ -1,0 +1,31 @@
+#!/bin/sh
+# Applies PS4 platform support to submodules that are maintained in separate repositories.
+# Safe to run multiple times.
+set -e
+
+ROOT=$(cd "$(dirname "$0")/../.." && pwd)
+PATCHES="$ROOT/scripts/ps4/patches"
+
+apply_patch()
+{
+	dir="$1"
+	patch="$2"
+
+	if git -C "$dir" apply --reverse --check "$patch" 2>/dev/null; then
+		echo "already applied: $(basename "$patch")"
+	elif git -C "$dir" apply --check "$patch" 2>/dev/null; then
+		git -C "$dir" apply "$patch"
+		echo "applied: $(basename "$patch")"
+	else
+		echo "ERROR: can't apply $(basename "$patch") to $dir" >&2
+		echo "Run: git submodule update --init --recursive" >&2
+		exit 1
+	fi
+}
+
+apply_patch "$ROOT/3rdparty/library_suffix" "$PATCHES/library_suffix-ps4.patch"
+
+# mainui keeps its own copy of build.h, keep it in sync
+cp "$ROOT/3rdparty/library_suffix/include/build.h" "$ROOT/3rdparty/library_suffix/include/buildenums.h" \
+	"$ROOT/3rdparty/mainui/sdk_includes/public/"
+echo "synced build.h to mainui"

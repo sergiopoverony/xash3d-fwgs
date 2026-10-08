@@ -909,7 +909,9 @@ qboolean R_Init_Video( ref_graphic_apis_t type )
 		SDL_SetHint( SDL_HINT_OPENGL_ES_DRIVER, "1" );
 #endif // XASH_WIN32
 
+#ifdef SDL_HINT_VIDEO_X11_FORCE_EGL // OpenOrbis SDL2 is too old
 		SDL_SetHint( SDL_HINT_VIDEO_X11_FORCE_EGL, "1" );
+#endif
 	}
 
 	SDL_SetHint( SDL_HINT_QTWAYLAND_WINDOW_FLAGS, "OverridesSystemGestures" );

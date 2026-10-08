@@ -210,8 +210,10 @@ MAYBE_UNUSED static const wchar_t *FS_PathToWideChar( const char *path )
 	static wchar_t pathBuffer[MAX_PATH];
 	MultiByteToWideChar( CP_UTF8, 0, path, -1, pathBuffer, MAX_PATH );
 	return pathBuffer;
+#else
+	static const wchar_t empty[1] = { 0 };
+	return empty;
 #endif
-	return L"";
 }
 
 /*
