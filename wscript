@@ -409,6 +409,12 @@ def configure(conf):
 	elif conf.env.SAILFISH:
 		conf.define('XASH_SAILFISH', 1)
 
+	if conf.env.DEST_OS == 'ps4':
+		# fix broken struct sockaddr_storage in OpenOrbis headers
+		fix = conf.path.find_node('engine/platform/ps4/compat/ps4_sockaddr.h').abspath()
+		cflags += ['-include', fix]
+		cxxflags += ['-include', fix]
+
 	conf.check_cc(cflags=cflags, linkflags=linkflags, msg='Checking for required C flags')
 	conf.check_cxx(cxxflags=cxxflags, linkflags=linkflags, msg='Checking for required C++ flags')
 
