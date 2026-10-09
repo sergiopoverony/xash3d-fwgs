@@ -183,10 +183,16 @@ void *PS4_dlopen( const char *name, int flags )
 	{
 		void ( *init )( void ) = NULL;
 
+		int ( *shared )( void ) = NULL;
+
 		if( sceKernelDlsym( handle, "__ps4_module_init", (void **)&init ) >= 0 && init )
 			init( );
 		else
 			PS4_Log( "warning: %s has no __ps4_module_init, global constructors may not run\n", path );
+
+		// see compat/ps4_malloc.c
+		if( sceKernelDlsym( handle, "__ps4_heap_shared", (void **)&shared ) >= 0 && shared )
+			PS4_Log( "%s: %s heap\n", path, shared( ) ? "shared" : "own" );
 	}
 
 	return (void *)(intptr_t)( handle + 1 );
