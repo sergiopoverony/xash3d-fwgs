@@ -20,6 +20,10 @@ GNU General Public License for more details.
 #include <unistd.h>
 #include <errno.h>
 #include <stdio.h>
+#include <stdarg.h>
+#include <ctype.h>
+#include <string.h>
+#include <pthread.h>
 #include <orbis/libkernel.h>
 #include <orbis/UserService.h>
 #include "platform/ps4/dlfcn_ps4.h"
@@ -33,13 +37,53 @@ GNU General Public License for more details.
 // optional command line, one or more arguments separated by whitespace
 #define PS4_CMDLINE_FILE "xash3d.cmdline"
 
-// stdout and stderr are redirected here, as there is no console
-#define PS4_STDOUT_FILE  "stdout.txt"
+// everything printed by engine goes here, written without stdio buffering
+// so it survives crashes
+#define PS4_LOG_FILE     "stdout.txt"
 
 #define PS4_MAX_ARGV 64
 
 static char ps4_basedir[256];
 static char *ps4_argv[PS4_MAX_ARGV];
+static char ps4_logpath[300];
+
+/*
+==================
+PS4_Log
+
+Appends message to log file, opening it each time, so nothing is lost on crash
+==================
+*/
+void PS4_Log( const char *fmt, ... )
+{
+	char buf[2048];
+	va_list va;
+	int fd, len;
+
+	if( !ps4_logpath[0] )
+		return;
+
+	va_start( va, fmt );
+	len = vsnprintf( buf, sizeof( buf ), fmt, va );
+	va_end( va );
+
+	if( len <= 0 )
+		return;
+
+	if( len >= (int)sizeof( buf ))
+		len = sizeof( buf ) - 1;
+
+	fd = open( ps4_logpath, O_WRONLY | O_CREAT | O_APPEND, 0666 );
+	if( fd < 0 )
+		return;
+
+	if( write( fd, buf, len ) < 0 )
+	{
+		// nothing we can do
+	}
+
+	close( fd );
+}
 
 /*
 =============================================================================
@@ -110,6 +154,7 @@ void *PS4_dlopen( const char *name, int flags )
 	if( !PS4_FileExists( path ))
 	{
 		PS4_SetDlError( "%s: file not found", path );
+		PS4_Log( "dlopen: %s\n", ps4_dlerror_buf );
 		return NULL;
 	}
 
@@ -118,8 +163,11 @@ void *PS4_dlopen( const char *name, int flags )
 	if( handle < 0 )
 	{
 		PS4_SetDlError( "%s: sceKernelLoadStartModule failed: 0x%08x", path, (uint32_t)handle );
+		PS4_Log( "dlopen: %s\n", ps4_dlerror_buf );
 		return NULL;
 	}
+
+	PS4_Log( "loaded module %s: 0x%x\n", path, handle );
 
 	return (void *)(intptr_t)( handle + 1 );
 }
@@ -183,7 +231,7 @@ int PS4_dladdr( const void *addr, Dl_info *info )
 static void PS4_MakeDir( const char *path )
 {
 	if( mkdir( path, 0777 ) < 0 && errno != EEXIST )
-		fprintf( stderr, "mkdir %s failed: %s\n", path, strerror( errno ));
+		PS4_Log( "mkdir %s failed: %s\n", path, strerror( errno ));
 }
 
 /*
@@ -245,8 +293,8 @@ if destination is missing or has different size
 */
 static void PS4_CopyFileIfChanged( const char *src, const char *dst )
 {
+	static char buf[65536];
 	struct stat sst, dst_st;
-	char buf[65536];
 	int in, out;
 	ssize_t len;
 
@@ -263,7 +311,7 @@ static void PS4_CopyFileIfChanged( const char *src, const char *dst )
 	out = open( dst, O_WRONLY | O_CREAT | O_TRUNC, 0666 );
 	if( out < 0 )
 	{
-		fprintf( stderr, "can't write %s: %s\n", dst, strerror( errno ));
+		PS4_Log( "can't write %s: %s\n", dst, strerror( errno ));
 		close( in );
 		return;
 	}
@@ -272,7 +320,7 @@ static void PS4_CopyFileIfChanged( const char *src, const char *dst )
 	{
 		if( write( out, buf, len ) != len )
 		{
-			fprintf( stderr, "write to %s failed: %s\n", dst, strerror( errno ));
+			PS4_Log( "write to %s failed: %s\n", dst, strerror( errno ));
 			break;
 		}
 	}
@@ -280,7 +328,7 @@ static void PS4_CopyFileIfChanged( const char *src, const char *dst )
 	close( out );
 	close( in );
 
-	printf( "installed %s\n", dst );
+	PS4_Log( "installed %s\n", dst );
 }
 
 static void PS4_SetupDataDir( void )
@@ -290,14 +338,11 @@ static void PS4_SetupDataDir( void )
 	PS4_GetBasePath( path, sizeof( path ));
 	PS4_MakeDir( path );
 
-	// redirect stdio to file, so early errors can be read through FTP
-	Q_snprintf( path, sizeof( path ), "%s/%s", ps4_basedir, PS4_STDOUT_FILE );
-	if( freopen( path, "w", stdout ))
-		setvbuf( stdout, NULL, _IOLBF, 0 );
-	if( freopen( path, "a", stderr ))
-		setvbuf( stderr, NULL, _IONBF, 0 );
+	// start new log on each launch
+	Q_snprintf( ps4_logpath, sizeof( ps4_logpath ), "%s/%s", ps4_basedir, PS4_LOG_FILE );
+	unlink( ps4_logpath );
 
-	printf( "Xash3D FWGS PS4: base directory %s\n", ps4_basedir );
+	PS4_Log( "Xash3D FWGS PS4: base directory %s\n", ps4_basedir );
 
 	// engine resources are shipped in the package, but should be visible to the game
 	Q_snprintf( path, sizeof( path ), "%s/%s", ps4_basedir, XASH_GAMEDIR );
@@ -360,20 +405,71 @@ int PS4_GetArgv( int in_argc, char **in_argv, char ***out_argv )
 	ps4_argv[argc] = NULL;
 
 	for( int i = 0; i < argc; i++ )
-		printf( "argv[%d] = %s\n", i, ps4_argv[i] );
+		PS4_Log( "argv[%d] = %s\n", i, ps4_argv[i] );
 
 	*out_argv = ps4_argv;
 	return argc;
 }
 
+/*
+==================
+PS4_RunOnBigStack
+
+Default main thread stack is too small for the engine
+==================
+*/
+#define PS4_MAIN_STACK_SIZE ( 16 * 1024 * 1024 )
+
+typedef struct
+{
+	int ( *func )( void *arg );
+	void *arg;
+	int ret;
+} ps4_thread_args_t;
+
+static void *PS4_ThreadEntry( void *arg )
+{
+	ps4_thread_args_t *args = arg;
+
+	args->ret = args->func( args->arg );
+	return NULL;
+}
+
+int PS4_RunOnBigStack( int ( *func )( void *arg ), void *arg )
+{
+	ps4_thread_args_t args = { func, arg, 0 };
+	pthread_attr_t attr;
+	pthread_t thread;
+	int ret;
+
+	pthread_attr_init( &attr );
+	pthread_attr_setstacksize( &attr, PS4_MAIN_STACK_SIZE );
+
+	ret = pthread_create( &thread, &attr, PS4_ThreadEntry, &args );
+	pthread_attr_destroy( &attr );
+
+	if( ret != 0 )
+	{
+		PS4_Log( "pthread_create failed: %d, running on main thread\n", ret );
+		return func( arg );
+	}
+
+	PS4_Log( "started engine thread\n" );
+	pthread_join( thread, NULL );
+	PS4_Log( "engine thread finished: %d\n", args.ret );
+
+	return args.ret;
+}
+
 void PS4_Init( void )
 {
+	PS4_Log( "PS4_Init\n" );
+
 	// SDL's PS4 backends expect user service to be initialized
 	sceUserServiceInitialize( NULL );
 }
 
 void PS4_Shutdown( void )
 {
-	fflush( stdout );
-	fflush( stderr );
+	PS4_Log( "PS4_Shutdown\n" );
 }
