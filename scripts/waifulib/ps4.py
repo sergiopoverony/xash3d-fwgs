@@ -25,7 +25,10 @@ PS4_SYSTEM_LIBS = ['-lSceNet', '-lkernel']
 
 # file functions redirected to working directory emulation, see engine/platform/ps4/compat/ps4_cwd.c
 PS4_WRAPPED_FUNCS = ['open', 'fopen', 'stat', 'lstat', 'fstat', 'opendir', 'mkdir', 'rename', 'remove',
-	'unlink', 'rmdir', 'access', 'chdir', 'getcwd', 'realpath']
+	'unlink', 'rmdir', 'access', 'chdir', 'getcwd', 'realpath',
+	# memory allocation goes to the system allocator, see ps4_malloc.c
+	'malloc', 'free', 'calloc', 'realloc', 'memalign', 'aligned_alloc', 'valloc', 'posix_memalign',
+	'malloc_usable_size']
 
 def configure(conf):
 	toolchain = conf.env.PS4_TOOLCHAIN
@@ -38,8 +41,9 @@ def configure(conf):
 	# runtime objects linked into every image:
 	# ps4_cwd.c - working directory emulation
 	# ps4_crtlib.c - module startup code, replaces broken crtlib.o from the toolchain
+	# ps4_malloc.c - shared thread-safe system allocator for all images
 	# engine and hlsdk-portable keep them in different places
-	for name in ['ps4_cwd', 'ps4_crtlib']:
+	for name in ['ps4_cwd', 'ps4_crtlib', 'ps4_malloc']:
 		for i in ['engine/platform/ps4/compat/', 'scripts/ps4/']:
 			src = conf.path.find_node(i + name + '.c')
 			if src:
@@ -57,7 +61,7 @@ def configure(conf):
 			conf.fatal('Failed to compile %s: %s' % (src.abspath(), e))
 		conf.end_msg('ok')
 
-		conf.env['PS4_RT_' + name.upper()[4:]] = obj.abspath() # PS4_RT_CWD, PS4_RT_CRTLIB
+		conf.env['PS4_RT_' + name.upper()[4:]] = obj.abspath() # PS4_RT_CWD, PS4_RT_CRTLIB, PS4_RT_MALLOC
 
 	conf.env.PS4_WRAP_FLAGS = ['-Wl,--wrap=%s' % i for i in PS4_WRAPPED_FUNCS]
 
@@ -72,7 +76,7 @@ def ps4_add_runtime(self):
 	is_library = 'cshlib' in self.features or 'cxxshlib' in self.features
 	is_cxx = 'cxx' in self.features or 'cxxprogram' in self.features or 'cxxshlib' in self.features
 
-	flags = [self.env.PS4_RT_CRTLIB if is_library else self.env.PS4_CRT_PROGRAM, self.env.PS4_RT_CWD]
+	flags = [self.env.PS4_RT_CRTLIB if is_library else self.env.PS4_CRT_PROGRAM, self.env.PS4_RT_CWD, self.env.PS4_RT_MALLOC]
 	flags += self.env.PS4_WRAP_FLAGS
 	if is_cxx:
 		flags += ['-lc++']
