@@ -47,6 +47,25 @@ index e18b790..5ca56ca 100644
  		break;
  	}
  #endif
+diff --git a/controls/DropDown.cpp b/controls/DropDown.cpp
+index df9a835..eb00d2a 100644
+--- a/controls/DropDown.cpp
++++ b/controls/DropDown.cpp
+@@ -103,6 +103,14 @@ bool CMenuDropDown::KeyUp( int key )
+ 
+ 	if( !FBitSet( iFlags, QMF_MOUSEONLY ) )
+ 	{
++#if defined( __ORBIS__ )
++		// with gamepad arrows are used to move between items, so closed
++		// list must not change its value, otherwise passing through filters
++		// changes them and refreshes the server list
++		if( !m_isOpen && ( UI::Key::IsDownArrow( key ) || UI::Key::IsUpArrow( key )))
++			;
++		else
++#endif
+ 		if( UI::Key::IsDownArrow( key ) )
+ 			state += 1;
+ 		else if( UI::Key::IsUpArrow( key ) )
 diff --git a/controls/Framework.cpp b/controls/Framework.cpp
 index 12d2a29..300f1d3 100644
 --- a/controls/Framework.cpp
