@@ -344,6 +344,10 @@ static void PS4_SetupDataDir( void )
 
 	PS4_Log( "Xash3D FWGS PS4: base directory %s\n", ps4_basedir );
 
+	// emulated by platform/ps4/compat/ps4_cwd.c, so relative paths work in engine image too
+	if( chdir( ps4_basedir ) < 0 )
+		PS4_Log( "chdir %s failed: %s\n", ps4_basedir, strerror( errno ));
+
 	// engine resources are shipped in the package, but should be visible to the game
 	Q_snprintf( path, sizeof( path ), "%s/%s", ps4_basedir, XASH_GAMEDIR );
 	PS4_MakeDir( path );
