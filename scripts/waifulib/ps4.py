@@ -24,7 +24,7 @@ from waflib import TaskGen
 PS4_SYSTEM_LIBS = ['-lSceNet', '-lkernel']
 
 # file functions redirected to working directory emulation, see engine/platform/ps4/compat/ps4_cwd.c
-PS4_WRAPPED_FUNCS = ['open', 'fopen', 'stat', 'lstat', 'opendir', 'mkdir', 'rename', 'remove',
+PS4_WRAPPED_FUNCS = ['open', 'fopen', 'stat', 'lstat', 'fstat', 'opendir', 'mkdir', 'rename', 'remove',
 	'unlink', 'rmdir', 'access', 'chdir', 'getcwd', 'realpath']
 
 def configure(conf):

@@ -24,6 +24,7 @@ GNU General Public License for more details.
 #include <ctype.h>
 #include <string.h>
 #include <pthread.h>
+#include <signal.h>
 #include <orbis/libkernel.h>
 #include <orbis/UserService.h>
 #include "platform/ps4/dlfcn_ps4.h"
@@ -46,6 +47,11 @@ GNU General Public License for more details.
 static char ps4_basedir[256];
 static char *ps4_argv[PS4_MAX_ARGV];
 static char ps4_logpath[300];
+
+static void PS4_InstallCrashHandler( void );
+
+// platform/ps4/compat/ps4_cwd.c
+const char *PS4_GetStatLayout( void );
 
 /*
 ==================
@@ -98,6 +104,7 @@ Handles are kernel module ids, offset by 1 so 0 is never a valid handle
 static char ps4_dlerror_buf[512];
 static qboolean ps4_dlerror_set;
 
+static void PS4_SetDlError( const char *fmt, ... ) FORMAT_CHECK( 1 );
 static void PS4_SetDlError( const char *fmt, ... )
 {
 	va_list va;
@@ -342,7 +349,7 @@ static void PS4_SetupDataDir( void )
 	Q_snprintf( ps4_logpath, sizeof( ps4_logpath ), "%s/%s", ps4_basedir, PS4_LOG_FILE );
 	unlink( ps4_logpath );
 
-	PS4_Log( "Xash3D FWGS PS4: base directory %s\n", ps4_basedir );
+	PS4_Log( "Xash3D FWGS PS4: base directory %s, stat layout %s\n", ps4_basedir, PS4_GetStatLayout( ));
 
 	// emulated by platform/ps4/compat/ps4_cwd.c, so relative paths work in engine image too
 	if( chdir( ps4_basedir ) < 0 )
@@ -370,6 +377,8 @@ int PS4_GetArgv( int in_argc, char **in_argv, char ***out_argv )
 	FILE *f;
 
 	PS4_SetupDataDir();
+
+	PS4_InstallCrashHandler( );
 
 	ps4_argv[argc++] = ( in_argc > 0 && in_argv[0] ) ? in_argv[0] : (char *)PS4_APP_DIR "/eboot.bin";
 
@@ -413,6 +422,152 @@ int PS4_GetArgv( int in_argc, char **in_argv, char ***out_argv )
 
 	*out_argv = ps4_argv;
 	return argc;
+}
+
+/*
+=============================================================================
+
+	CRASH HANDLER
+
+Logs faulting address as module + offset, so it can be resolved with
+llvm-addr2line on unstripped ELF from build directory
+
+=============================================================================
+*/
+
+// PS4 kernel uses FreeBSD numbering and layouts, OpenOrbis headers partially don't
+#define PS4_SIGILL     4
+#define PS4_SIGFPE     8
+#define PS4_SIGBUS     10
+#define PS4_SIGSEGV    11
+#define PS4_SA_SIGINFO 0x40
+
+// FreeBSD amd64 ucontext_t: 16 bytes of sigset, then mcontext with 8 byte registers
+#define PS4_MC_RBP 9
+#define PS4_MC_RIP 20
+#define PS4_MC_RSP 23
+
+#define PS4_MAX_MODULES 128
+
+static OrbisKernelModuleInfo ps4_modules[PS4_MAX_MODULES];
+static size_t ps4_num_modules;
+
+static void PS4_CollectModules( void )
+{
+	OrbisKernelModule handles[PS4_MAX_MODULES];
+	size_t count = 0;
+
+	ps4_num_modules = 0;
+
+	if( sceKernelGetModuleList( handles, PS4_MAX_MODULES, &count ) < 0 )
+		return;
+
+	for( size_t i = 0; i < count && i < PS4_MAX_MODULES; i++ )
+	{
+		OrbisKernelModuleInfo *info = &ps4_modules[ps4_num_modules];
+
+		memset( info, 0, sizeof( *info ));
+		info->size = sizeof( *info );
+
+		if( sceKernelGetModuleInfo( handles[i], info ) >= 0 )
+			ps4_num_modules++;
+	}
+}
+
+// returns module name and offset from its first segment if address belongs to code of any module
+static qboolean PS4_AddrToModule( uintptr_t addr, const char **name, uintptr_t *offset )
+{
+	for( size_t i = 0; i < ps4_num_modules; i++ )
+	{
+		const OrbisKernelModuleInfo *info = &ps4_modules[i];
+
+		for( uint32_t j = 0; j < info->segmentCount && j < 4; j++ )
+		{
+			uintptr_t start = (uintptr_t)info->segmentInfo[j].address;
+
+			if( addr >= start && addr < start + info->segmentInfo[j].size )
+			{
+				*name = info->name;
+				*offset = addr - (uintptr_t)info->segmentInfo[0].address;
+				return true;
+			}
+		}
+	}
+
+	return false;
+}
+
+static void PS4_LogAddr( const char *prefix, uintptr_t addr )
+{
+	const char *name;
+	uintptr_t offset;
+
+	if( PS4_AddrToModule( addr, &name, &offset ))
+		PS4_Log( "%s 0x%016lx %s+0x%lx\n", prefix, (unsigned long)addr, name, (unsigned long)offset );
+	else
+		PS4_Log( "%s 0x%016lx\n", prefix, (unsigned long)addr );
+}
+
+static void PS4_CrashHandler( int sig, siginfo_t *si, void *context )
+{
+	static volatile int crashed;
+	const uint64_t *regs = (const uint64_t *)((const byte *)context + 16 );
+	const uintptr_t *stack;
+	void *fault_addr = NULL;
+	int found = 0;
+
+	if( crashed++ )
+		_exit( 1 );
+
+	// FreeBSD siginfo: si_addr follows six ints
+	if( si )
+		memcpy( &fault_addr, (const byte *)si + 24, sizeof( fault_addr ));
+
+	PS4_CollectModules( );
+
+	PS4_Log( "\n*** CRASH: signal %d, fault address %p ***\n", sig, fault_addr );
+	PS4_LogAddr( "rip", regs[PS4_MC_RIP] );
+	PS4_LogAddr( "rbp", regs[PS4_MC_RBP] );
+	PS4_Log( "rsp 0x%016lx\n", (unsigned long)regs[PS4_MC_RSP] );
+
+	// frame pointers are usually omitted, so scan stack for return addresses
+	stack = (const uintptr_t *)regs[PS4_MC_RSP];
+	for( int i = 0; i < 512 && found < 24; i++ )
+	{
+		const char *name;
+		uintptr_t offset;
+
+		if( PS4_AddrToModule( stack[i], &name, &offset ))
+		{
+			PS4_Log( "  stack[%3d] %s+0x%lx\n", i, name, (unsigned long)offset );
+			found++;
+		}
+	}
+
+	PS4_Log( "loaded modules:\n" );
+	for( size_t i = 0; i < ps4_num_modules; i++ )
+	{
+		PS4_Log( "  %s at %p, size 0x%x\n", ps4_modules[i].name,
+			ps4_modules[i].segmentInfo[0].address, ps4_modules[i].segmentInfo[0].size );
+	}
+
+	_exit( 1 );
+}
+
+static void PS4_InstallCrashHandler( void )
+{
+	const int signals[] = { PS4_SIGILL, PS4_SIGFPE, PS4_SIGBUS, PS4_SIGSEGV };
+	struct sigaction sa;
+
+	memset( &sa, 0, sizeof( sa ));
+	sa.__sa_handler.__sa_sigaction = (void *)PS4_CrashHandler;
+	sa.sa_flags = PS4_SA_SIGINFO;
+
+	for( size_t i = 0; i < ARRAYSIZE( signals ); i++ )
+	{
+		if( sigaction( signals[i], &sa, NULL ) < 0 )
+			PS4_Log( "sigaction %d failed: %s\n", signals[i], strerror( errno ));
+	}
 }
 
 /*
