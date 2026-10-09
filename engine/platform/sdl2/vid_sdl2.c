@@ -270,6 +270,7 @@ void SW_UnlockBuffer( void )
 
 		SDL_BlitScaled( sw.surf, &src, sw.win, &dst );
 		SDL_UpdateWindowSurface( host.hWnd );
+		PS4_FramePresented( );
 #else
 		SDL_BlitSurface( sw.surf, &src, sw.win, &dst );
 #endif
@@ -280,6 +281,9 @@ void SW_UnlockBuffer( void )
 	SDL_UnlockSurface( sw.win );
 
 	SDL_UpdateWindowSurface( host.hWnd );
+#if XASH_PS4
+	PS4_FramePresented( );
+#endif
 }
 
 int R_MaxVideoModes( void )

@@ -801,6 +801,27 @@ void PS4_Init( void )
 	sceUserServiceInitialize( NULL );
 }
 
+/*
+================
+PS4_FramePresented
+
+system keeps showing startup splash (sce_sys/pic0.png) over the game
+until application hides it, do it once the first frame is on screen
+================
+*/
+void PS4_FramePresented( void )
+{
+	static qboolean splash_hidden = false;
+	int ret;
+
+	if( splash_hidden )
+		return;
+
+	splash_hidden = true;
+	ret = sceSystemServiceHideSplashScreen( );
+	PS4_Log( "sceSystemServiceHideSplashScreen: 0x%x\n", ret );
+}
+
 void PS4_Shutdown( void )
 {
 	PS4_Log( "PS4_Shutdown\n" );

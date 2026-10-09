@@ -138,6 +138,7 @@ int PS4_GetArgv( int in_argc, char **in_argv, char ***out_argv );
 int PS4_RunOnBigStack( int ( *func )( void *arg ), void *arg );
 void PS4_Log( const char *fmt, ... ) FORMAT_CHECK( 1 );
 void PS4_InputUpdate( void );
+void PS4_FramePresented( void );
 #endif
 
 #if XASH_DOS

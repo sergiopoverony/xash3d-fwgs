@@ -61,13 +61,12 @@ if [ $found_ref = 0 ]; then
 fi
 
 cp "$BUILD/3rdparty/extras/extras.pk3" "$STAGE/valve/extras.pk3"
-# icon0.png - 512x512 icon, pic0.png - 1920x1080 startup splash, pic1.png - 1920x1080 background
-cp "$ROOT/engine/platform/ps4/sce_sys/icon0.png" "$ROOT/engine/platform/ps4/sce_sys/pic0.png" \
-	"$ROOT/engine/platform/ps4/sce_sys/pic1.png" "$STAGE/sce_sys/"
+# icon0.png - 512x512 icon, pic0.png - 1920x1080 startup splash, engine hides it after the first frame
+cp "$ROOT/engine/platform/ps4/sce_sys/icon0.png" "$ROOT/engine/platform/ps4/sce_sys/pic0.png" "$STAGE/sce_sys/"
 
 # custom images (e.g. from your copy of the game) override defaults, this directory is ignored by git
 CUSTOM="$ROOT/ps4_sce_sys"
-for f in icon0.png pic0.png pic1.png; do
+for f in icon0.png pic0.png; do
 	if [ -f "$CUSTOM/$f" ]; then
 		cp "$CUSTOM/$f" "$STAGE/sce_sys/$f"
 		echo "  using custom $f"
