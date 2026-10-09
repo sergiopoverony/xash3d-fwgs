@@ -26,7 +26,7 @@ PS4_SYSTEM_LIBS = ['-lSceNet', '-lkernel']
 # file functions redirected to working directory emulation, see engine/platform/ps4/compat/ps4_cwd.c
 PS4_WRAPPED_FUNCS = ['open', 'fopen', 'stat', 'lstat', 'fstat', 'opendir', 'mkdir', 'rename', 'remove',
 	'unlink', 'rmdir', 'access', 'chdir', 'getcwd', 'realpath',
-	# memory allocation is serialized, see ps4_malloc.c
+	# memory allocation goes to the process heap in eboot.bin, see ps4_malloc.c
 	'malloc', 'free', 'calloc', 'realloc', 'memalign', 'aligned_alloc', 'valloc', 'posix_memalign',
 	'malloc_usable_size']
 
@@ -41,7 +41,7 @@ def configure(conf):
 	# runtime objects linked into every image:
 	# ps4_cwd.c - working directory emulation
 	# ps4_crtlib.c - module startup code, replaces broken crtlib.o from the toolchain
-	# ps4_malloc.c - locking around musl malloc
+	# ps4_malloc.c - process-wide heap
 	# engine and hlsdk-portable keep them in different places
 	# (object name, source, extra flags)
 	objects = [
@@ -95,8 +95,8 @@ def ps4_add_runtime(self):
 	else:
 		flags = [self.env.PS4_CRT_PROGRAM]
 		if self.env.PS4_MALLOC_WRAP:
-			# modules find shared heap functions in eboot.bin by name
-			flags += [self.env.PS4_RT_MALLOC, '-Wl,--export-dynamic-symbol=__ps4_heap_*']
+			# eboot.bin owns the process heap, modules find it at runtime
+			flags += [self.env.PS4_RT_MALLOC]
 	flags += [self.env.PS4_RT_CWD]
 	flags += self.env.PS4_WRAP_FLAGS
 	if is_cxx:
