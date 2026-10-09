@@ -574,6 +574,23 @@ void Key_SetDefaultGamepadBindings( void )
 	const int main_keys[] = { K_A_BUTTON, K_B_BUTTON, K_X_BUTTON, K_Y_BUTTON, K_L1_BUTTON, K_R1_BUTTON };
 	int i;
 
+#if XASH_PS4
+	{
+		// PlayStation games traditionally fire with R2, swap fire buttons
+		// if they still have generic defaults saved by earlier versions
+		const char *r1 = Key_GetBinding( K_R1_BUTTON );
+		const char *rt = Key_GetBinding( K_RTRIGGER );
+
+		if( r1 && rt && !Q_strcmp( r1, "+attack" ) && !Q_strcmp( rt, "+attack2" ))
+		{
+			Con_Reportf( "%s: moving fire to R2\n", __func__ );
+			Key_SetBinding( K_R1_BUTTON, "+attack2" );
+			Key_SetBinding( K_RTRIGGER, "+attack" );
+			Key_SetBinding( K_R2_BUTTON, "+attack" );
+		}
+	}
+#endif
+
 	for( i = 0; i < ARRAYSIZE( main_keys ); i++ )
 	{
 		const char *binding = Key_GetBinding( main_keys[i] );
