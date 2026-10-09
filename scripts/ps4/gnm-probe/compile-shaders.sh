@@ -4,7 +4,7 @@
 #
 # Usage: scripts/ps4/gnm-probe/compile-shaders.sh
 #   GLSLANG - glslang standalone binary (default: glslang from PATH)
-#   PSBC    - opengnm-psbc binary built for the host (https://github.com/PS4-OpenGNM/opengnm-psbc)
+#   PSBC    - opengnm-psbc binary built for the host with our patch, see scripts/ps4/psbc/build.sh
 set -e
 
 DIR=$(cd "$(dirname "$0")/shaders" && pwd)

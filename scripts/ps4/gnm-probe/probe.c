@@ -18,8 +18,10 @@ GNU General Public License for more details.
 //   A. bare submit: default hardware state + EOP label write, no shaders
 //      (same as opengnm hardware smoke test)
 //   B. triangle: render target state, a triangle drawn with shaders compiled
-//      by opengnm-psbc and a clear are first submitted one by one, then
-//      per-frame command buffers with all of them are flipped to the screen
+//      by opengnm-psbc and a clear are first submitted one by one
+//   C. textured quad: uniform buffers in VS and PS, vertices pulled from a
+//      storage buffer, texture with sampler; all of them are then drawn in
+//      per-frame command buffers flipped to the screen
 // Parts of stage B can be turned off with /data/xash/gnmprobe.cfg, see load_cfg().
 // Based on the triangle sample from freegnm-examples (MIT).
 
@@ -136,7 +138,8 @@ _Noreturn void probe_exit( int code )
 static char probe_cfg[256];
 
 // /data/xash/gnmprobe.cfg: words that turn parts of stage B off without rebuilding,
-// "nodefault" - no default hardware state, "notri" - no triangle, "noclear" - no clear
+// "nodefault" - no default hardware state, "notri" - no triangle, "noclear" - no clear,
+// "noquad" - no textured quad (stage C)
 static void load_cfg( void )
 {
 	int fd = sceKernelOpen( LOG_DIR "/gnmprobe.cfg", O_RDONLY, 0 );
@@ -345,6 +348,14 @@ typedef struct
 	uint32_t cmdsize;
 	volatile uint64_t *label;
 	lowpool_t low; // descriptor tables, reused by every command buffer
+
+	// stage C: textured quad with resources in both stages
+	GnmVsShader *quadvs;
+	GnmPsShader *quadps;
+	int quadvsreg, quadpsreg;
+	GnmTexture tex;
+	GnmSampler samp;
+	float *verts;
 } scene_t;
 
 static GnmCommandBuffer begin_cmd( scene_t *s )
@@ -460,6 +471,164 @@ static void emit_clear( scene_t *s, GnmCommandBuffer *cmd, const float color[4],
 		gnmDrawCmdWaitGraphicsWrite( cmd, GNM_ACQUIRE_TARGET_CB0 | GNM_ACQUIRE_TARGET_DB );
 }
 
+_Static_assert( sizeof( GnmBuffer ) == 16, "V# size" );
+_Static_assert( sizeof( GnmTexture ) == 32, "T# size" );
+_Static_assert( sizeof( GnmSampler ) == 16, "S# size" );
+
+// writes one user SGPR: psbc passes descriptor table address in a single 32-bit SGPR,
+// SetPointerUserData writes two and could overwrite the next shader argument
+static void set_user_sgpr( GnmCommandBuffer *cmd, GnmShaderStage stage, uint32_t reg, uint32_t value )
+{
+	// SPI_SHADER_USER_DATA_PS_0 and SPI_SHADER_USER_DATA_VS_0 relative to SH register space
+	const uint32_t base = stage == GNM_STAGE_PS ? 0x0c : 0x4c;
+
+	if( cmd->cmdptr + 3 > cmd->endptr )
+		return;
+
+	cmd->cmdptr[0] = 0xc0017600; // PKT3( SET_SH_REG, 1 )
+	cmd->cmdptr[1] = base + reg;
+	cmd->cmdptr[2] = value;
+	cmd->cmdptr += 3;
+}
+
+// buffer descriptor like radv makes: raw, size in bytes, works for uniform and storage buffers
+static GnmBuffer raw_buffer( void *base, uint32_t size )
+{
+	GnmBuffer b = gnmCreateConstBuffer( base, size );
+
+	b.stride = 0;
+	b.numrecords = size;
+	return b;
+}
+
+static bool init_quad( scene_t *s, MemoryAllocator *garlic )
+{
+	// two triangles, xy - position, zw - texture coordinates
+	static const float quad[6][4] = {
+		{ -1.0f, -1.0f, 0.0f, 1.0f }, { 1.0f, -1.0f, 1.0f, 1.0f }, { 1.0f, 1.0f, 1.0f, 0.0f },
+		{ -1.0f, -1.0f, 0.0f, 1.0f }, { 1.0f, 1.0f, 1.0f, 0.0f }, { -1.0f, 1.0f, 0.0f, 0.0f },
+	};
+	const uint32_t size = 64;
+	GnmTextureCreateInfo ci;
+	uint32_t *pixels;
+	GnmError err;
+	uint32_t x, y;
+
+	if( !loadvshader( &s->quadvs, garlic, "/app0/assets/misc/quad.vert.sb" ) || !loadpshader( &s->quadps, garlic, "/app0/assets/misc/quad.frag.sb" ))
+	{
+		printf( "C: FAIL, quad shaders not loaded" );
+		return false;
+	}
+
+	s->quadvsreg = find_table_register( gnmVsShaderInputUsageSlotTable( s->quadvs ), s->quadvs->common.numinputusageslots );
+	s->quadpsreg = find_table_register( gnmPsShaderInputUsageSlotTable( s->quadps ), s->quadps->common.numinputusageslots );
+	printf( "C: quad shaders loaded, resource tables in VS SGPR %d, PS SGPR %d, vs exports %u, ps inputs %u",
+		s->quadvsreg, s->quadpsreg, s->quadvs->numexportsemantics, s->quadps->numinputsemantics );
+	if( s->quadvsreg < 0 || s->quadpsreg < 0 )
+	{
+		printf( "C: FAIL, quad shaders don't read resource tables" );
+		return false;
+	}
+
+	// orange and dark gray checkerboard, 8x8 cells
+	pixels = memalloc_alloc( garlic, size * size * 4, 256 );
+	s->verts = memalloc_alloc( garlic, sizeof( quad ), 256 );
+	if( !pixels || !s->verts )
+	{
+		printf( "C: FAIL, garlic allocation" );
+		return false;
+	}
+
+	for( y = 0; y < size; y++ )
+	{
+		for( x = 0; x < size; x++ )
+			pixels[y * size + x] = (( x / 8 + y / 8 ) & 1 ) ? 0xff008cffu : 0xff282828u; // A B G R
+	}
+	memcpy( s->verts, quad, sizeof( quad ));
+
+	memset( &ci, 0, sizeof( ci ));
+	ci.texturetype = GNM_TEXTURE_2D;
+	ci.width = size;
+	ci.height = size;
+	ci.depth = 1;
+	ci.pitch = size;
+	ci.nummiplevels = 1;
+	ci.numslices = 1;
+	ci.format = GNM_FMT_R8G8B8A8_UNORM;
+	ci.tilemodehint = GNM_TM_DISPLAY_LINEAR_GENERAL;
+	ci.mingpumode = GNM_GPU_BASE;
+	ci.numfragments = 1;
+
+	err = gnmCreateTexture( &s->tex, &ci );
+	if( err != GNM_ERROR_OK )
+	{
+		printf( "C: FAIL, texture: %s", gnmStrError( err ));
+		return false;
+	}
+	gnmTexSetBaseAddress( &s->tex, pixels );
+
+	memset( &s->samp, 0, sizeof( s->samp ));
+	s->samp.clampx = GNM_TEX_CLAMP_CLAMP_LAST_TEXEL;
+	s->samp.clampy = GNM_TEX_CLAMP_CLAMP_LAST_TEXEL;
+	s->samp.clampz = GNM_TEX_CLAMP_CLAMP_LAST_TEXEL;
+	s->samp.xymagfilter = GNM_FILTER_POINT;
+	s->samp.xyminfilter = GNM_FILTER_POINT;
+	s->samp.maxlod = 0xfff;
+
+	printf( "C: texture %ux%u at %p, vertices at %p", size, size, (void *)pixels, (void *)s->verts );
+	return true;
+}
+
+// descriptor set 0 layouts made by patched psbc (scripts/ps4/psbc):
+//   quad.vert: binding 0 uniform buffer at 0, binding 1 storage buffer at 16
+//   quad.frag: binding 0 uniform buffer at 0, binding 1 combined image sampler at 16 (T#) and 48 (S#)
+static bool emit_quad( scene_t *s, GnmCommandBuffer *cmd, int frame )
+{
+	// moves left and right, color pulses, so per-frame uniform updates are visible
+	const float t = (float)( frame % 240 ) / 120.0f;
+	const float k = t < 1.0f ? t : 2.0f - t;
+	const float aspect = (float)s->display.screenw / (float)s->display.screenh;
+	float *vsdata = lowpool_alloc( &s->low, 16, 16 );
+	float *psdata = lowpool_alloc( &s->low, 16, 16 );
+	uint8_t *vstable = lowpool_alloc( &s->low, 32, 16 );
+	uint8_t *pstable = lowpool_alloc( &s->low, 64, 16 );
+	GnmBuffer b;
+
+	if( !vsdata || !psdata || !vstable || !pstable )
+		return false;
+
+	vsdata[0] = 0.25f;
+	vsdata[1] = 0.25f * aspect;
+	vsdata[2] = -0.5f + k;
+	vsdata[3] = -0.3f;
+
+	psdata[0] = 1.0f;
+	psdata[1] = 1.0f - 0.5f * k;
+	psdata[2] = 0.5f + 0.5f * k;
+	psdata[3] = 1.0f;
+
+	b = raw_buffer( vsdata, 16 );
+	memcpy( vstable + 0, &b, sizeof( b ));
+	b = raw_buffer( s->verts, 6 * 16 );
+	memcpy( vstable + 16, &b, sizeof( b ));
+
+	b = raw_buffer( psdata, 16 );
+	memcpy( pstable + 0, &b, sizeof( b ));
+	memcpy( pstable + 16, &s->tex, sizeof( s->tex ));
+	memcpy( pstable + 48, &s->samp, sizeof( s->samp ));
+
+	gnmDrawCmdSetVsShader( cmd, &s->quadvs->registers, 0 );
+	gnmDrawCmdSetPsShader( cmd, &s->quadps->registers );
+	gnmDrawCmdSetPsInputUsage( cmd, gnmVsShaderExportSemanticTable( s->quadvs ), s->quadvs->numexportsemantics,
+		gnmPsShaderInputSemanticTable( s->quadps ), s->quadps->numinputsemantics );
+	set_user_sgpr( cmd, GNM_STAGE_VS, s->quadvsreg, (uint32_t)(uintptr_t)vstable );
+	set_user_sgpr( cmd, GNM_STAGE_PS, s->quadpsreg, (uint32_t)(uintptr_t)pstable );
+
+	gnmDrawCmdSetPrimitiveType( cmd, GNM_PT_TRILIST );
+	gnmDrawCmdDrawIndexAuto( cmd, 6 );
+	return true;
+}
+
 // name is logged before submit, so after a crash the last line tells what killed it
 static bool submit_and_wait( scene_t *s, const char *name, GnmCommandBuffer *cmd, bool verbose, uint64_t *waited )
 {
@@ -507,15 +676,15 @@ static bool stage_triangle( MemoryAllocator *garlic )
 {
 	static scene_t scene;
 	scene_t *s = &scene;
-	const bool tri = !cfg( "notri" ), clear = !cfg( "noclear" );
+	const bool tri = !cfg( "notri" ), clear = !cfg( "noclear" ), quad = !cfg( "noquad" );
 	const float white[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
 	uint64_t max_wait = 0, total_wait = 0;
 	uint64_t start;
 	GnmCommandBuffer cmd;
 	int frame;
 
-	printf( "=== stage B: triangle (default state %s, triangle %s, clear %s)",
-		cfg( "nodefault" ) ? "off" : "on", tri ? "on" : "off", clear ? "on" : "off" );
+	printf( "=== stage B: triangle (default state %s, triangle %s, clear %s, quad %s)",
+		cfg( "nodefault" ) ? "off" : "on", tri ? "on" : "off", clear ? "on" : "off", quad ? "on" : "off" );
 
 	if( !loadvshader( &s->vs, garlic, "/app0/assets/misc/tri.vert.sb" ) || !loadpshader( &s->ps, garlic, "/app0/assets/misc/tri.frag.sb" )
 		|| !loadvshader( &s->fullvs, garlic, "/app0/assets/misc/fullscreen.vert.sb" )
@@ -581,22 +750,28 @@ static bool stage_triangle( MemoryAllocator *garlic )
 
 	if( clear )
 	{
-		static const struct { const char *name; int parts; } steps[] = {
-			{ "B3a clear: draw only", 0 },
-			{ "B3b clear: + resource table", CLEAR_TABLE },
-			{ "B3c clear: + data in command buffer", CLEAR_TABLE | CLEAR_ALLOC },
-			{ "B3d clear: + depth/stencil controls", CLEAR_TABLE | CLEAR_ALLOC | CLEAR_DB },
-			{ "B3e clear: + wait for writes", CLEAR_ALL },
-		};
-		size_t i;
+		cmd = begin_cmd( s );
+		emit_clear( s, &cmd, white, CLEAR_ALL );
+		if( !submit_and_wait( s, "B3 clear", &cmd, true, NULL ))
+			return false;
+	}
 
-		for( i = 0; i < sizeof( steps ) / sizeof( steps[0] ); i++ )
+	if( quad )
+	{
+		printf( "=== stage C: textured quad" );
+		if( !init_quad( s, garlic ))
+			return false;
+
+		cmd = begin_cmd( s );
+		emit_clear( s, &cmd, white, CLEAR_ALL );
+		emit_target( s, &cmd );
+		if( !emit_quad( s, &cmd, 0 ))
 		{
-			cmd = begin_cmd( s );
-			emit_clear( s, &cmd, white, steps[i].parts );
-			if( !submit_and_wait( s, steps[i].name, &cmd, true, NULL ))
-				return false;
+			printf( "C: FAIL, descriptor pool is full" );
+			return false;
 		}
+		if( !submit_and_wait( s, "C1 textured quad", &cmd, true, NULL ))
+			return false;
 	}
 
 	// what is drawn so far goes to the screen
@@ -622,6 +797,8 @@ static bool stage_triangle( MemoryAllocator *garlic )
 		emit_target( s, &cmd );
 		if( tri )
 			emit_triangle( s, &cmd );
+		if( quad )
+			emit_quad( s, &cmd, frame );
 
 		if( !submit_and_wait( s, "B4 frame", &cmd, frame == 0, &waited ))
 		{
