@@ -47,6 +47,7 @@ GNU General Public License for more details.
 static char ps4_basedir[256];
 static char *ps4_argv[PS4_MAX_ARGV];
 static char ps4_logpath[300];
+static volatile uint64_t ps4_last_log_time;
 
 static void PS4_InstallCrashHandler( void );
 
@@ -68,6 +69,8 @@ void PS4_Log( const char *fmt, ... )
 
 	if( !ps4_logpath[0] )
 		return;
+
+	ps4_last_log_time = sceKernelGetProcessTime( );
 
 	va_start( va, fmt );
 	len = vsnprintf( buf, sizeof( buf ), fmt, va );
@@ -508,24 +511,14 @@ static void PS4_LogAddr( const char *prefix, uintptr_t addr )
 		PS4_Log( "%s 0x%016lx\n", prefix, (unsigned long)addr );
 }
 
-static void PS4_CrashHandler( int sig, siginfo_t *si, void *context )
+static void PS4_DumpContext( void *context )
 {
-	static volatile int crashed;
 	const uint64_t *regs = (const uint64_t *)((const byte *)context + 16 );
 	const uintptr_t *stack;
-	void *fault_addr = NULL;
 	int found = 0;
-
-	if( crashed++ )
-		_exit( 1 );
-
-	// FreeBSD siginfo: si_addr follows six ints
-	if( si )
-		memcpy( &fault_addr, (const byte *)si + 24, sizeof( fault_addr ));
 
 	PS4_CollectModules( );
 
-	PS4_Log( "\n*** CRASH: signal %d, fault address %p ***\n", sig, fault_addr );
 	PS4_LogAddr( "rip", regs[PS4_MC_RIP] );
 	PS4_LogAddr( "rbp", regs[PS4_MC_RBP] );
 	PS4_Log( "rsp 0x%016lx\n", (unsigned long)regs[PS4_MC_RSP] );
@@ -550,8 +543,63 @@ static void PS4_CrashHandler( int sig, siginfo_t *si, void *context )
 		PS4_Log( "  %s at %p, size 0x%x\n", ps4_modules[i].name,
 			ps4_modules[i].segmentInfo[0].address, ps4_modules[i].segmentInfo[0].size );
 	}
+}
 
+static void PS4_CrashHandler( int sig, siginfo_t *si, void *context )
+{
+	static volatile int crashed;
+	void *fault_addr = NULL;
+
+	if( crashed++ )
+		_exit( 1 );
+
+	// FreeBSD siginfo: si_addr follows six ints
+	if( si )
+		memcpy( &fault_addr, (const byte *)si + 24, sizeof( fault_addr ));
+
+	PS4_Log( "\n*** CRASH: signal %d, fault address %p ***\n", sig, fault_addr );
+	PS4_DumpContext( context );
 	_exit( 1 );
+}
+
+/*
+==================
+PS4_Watchdog
+
+If engine prints nothing for a while, it's probably stuck: log where
+==================
+*/
+#define PS4_SIGUSR1         30
+#define PS4_WATCHDOG_USEC   ( 10 * 1000 * 1000 )
+
+static pthread_t ps4_engine_thread;
+static volatile qboolean ps4_engine_thread_valid;
+
+static void PS4_WatchdogSignal( int sig, siginfo_t *si, void *context )
+{
+	PS4_Log( "\n*** WATCHDOG: engine thread state ***\n" );
+	PS4_DumpContext( context );
+	PS4_Log( "*** WATCHDOG: end ***\n" );
+}
+
+static void *PS4_WatchdogThread( void *arg )
+{
+	while( 1 )
+	{
+		sceKernelUsleep( 1000 * 1000 );
+
+		if( !ps4_engine_thread_valid || !ps4_last_log_time )
+			continue;
+
+		if( sceKernelGetProcessTime( ) - ps4_last_log_time > PS4_WATCHDOG_USEC )
+		{
+			PS4_Log( "watchdog: no output for %d seconds\n", PS4_WATCHDOG_USEC / 1000000 );
+			pthread_kill( ps4_engine_thread, PS4_SIGUSR1 );
+			break; // only once, it's a diagnostic
+		}
+	}
+
+	return NULL;
 }
 
 static void PS4_InstallCrashHandler( void )
@@ -568,6 +616,10 @@ static void PS4_InstallCrashHandler( void )
 		if( sigaction( signals[i], &sa, NULL ) < 0 )
 			PS4_Log( "sigaction %d failed: %s\n", signals[i], strerror( errno ));
 	}
+
+	sa.__sa_handler.__sa_sigaction = (void *)PS4_WatchdogSignal;
+	if( sigaction( PS4_SIGUSR1, &sa, NULL ) < 0 )
+		PS4_Log( "sigaction %d failed: %s\n", PS4_SIGUSR1, strerror( errno ));
 }
 
 /*
@@ -589,6 +641,13 @@ typedef struct
 static void *PS4_ThreadEntry( void *arg )
 {
 	ps4_thread_args_t *args = arg;
+	pthread_t watchdog;
+
+	ps4_engine_thread = pthread_self( );
+	ps4_engine_thread_valid = true;
+
+	if( pthread_create( &watchdog, NULL, PS4_WatchdogThread, NULL ) == 0 )
+		pthread_detach( watchdog );
 
 	args->ret = args->func( args->arg );
 	return NULL;
