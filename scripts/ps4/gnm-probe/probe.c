@@ -274,6 +274,8 @@ typedef struct
 	GnmRenderTarget fb;
 	GnmVsShader *vs;
 	GnmPsShader *ps;
+	GnmPsShader *clearps;
+	int clearreg; // user SGPR with pointer to resource table of clear shader
 	void *cmdmem;
 	uint32_t cmdsize;
 	volatile uint64_t *label;
@@ -315,9 +317,55 @@ static void emit_triangle( scene_t *s, GnmCommandBuffer *cmd )
 	gnmDrawCmdDrawIndexAuto( cmd, 3 );
 }
 
+// opengnm-psbc puts pointer to descriptor set 0 into a user SGPR chosen by the compiler,
+// it's not always register 0, so it must be taken from the shader input usage table
+static int find_table_register( const GnmInputUsageSlot *slots, unsigned count )
+{
+	unsigned i;
+
+	for( i = 0; i < count; i++ )
+	{
+		if( slots[i].usagetype == GNM_SHINPUTUSAGE_PTR_INDIRECTRESOURCETABLE )
+			return slots[i].startregister;
+	}
+
+	return -1;
+}
+
+// same as clearcolortarget() from freegnm-examples, but with correct resource table register
 static void emit_clear( scene_t *s, GnmCommandBuffer *cmd, const float color[4] )
 {
-	clearcolortarget( cmd, &s->fb, color );
+	const GnmDbRenderControl dbrenderctrl = { 0 };
+	const GnmDepthStencilControl depthstencilctrl = {
+		.zfunc = GNM_DEPTH_COMPARE_NEVER,
+		.stencilfunc = GNM_DEPTH_COMPARE_NEVER,
+		.stencilbackfunc = GNM_DEPTH_COMPARE_NEVER,
+	};
+	float *colorbuf;
+	GnmBuffer *table;
+	int i;
+
+	gnmDrawCmdSetDbRenderControl( cmd, &dbrenderctrl );
+	gnmDrawCmdSetDepthStencilControl( cmd, &depthstencilctrl );
+
+	gnmDrawCmdSetEmbeddedVsShader( cmd, GNM_EMBEDDED_VSH_FULLSCREEN, 0 );
+	gnmDrawCmdSetPsShader( cmd, &s->clearps->registers );
+
+	// constant buffer with color and the table with its descriptor live inside the command buffer
+	colorbuf = gnmCmdAllocInside( cmd, sizeof( float ) * 4, 4 );
+	table = gnmCmdAllocInside( cmd, sizeof( GnmBuffer ), 16 );
+	for( i = 0; i < 4; i++ )
+		colorbuf[i] = color[i];
+	*table = gnmCreateConstBuffer( colorbuf, sizeof( float ) * 4 );
+	gnmDrawCmdSetPointerUserData( cmd, GNM_STAGE_PS, s->clearreg, table );
+
+	setupviewport( cmd, 0, 0, s->fb.size.width, s->fb.size.height, 0.5f, 0.5f );
+	gnmDrawCmdSetRenderTarget( cmd, 0, &s->fb );
+	gnmDrawCmdSetRenderTargetMask( cmd, 0xf );
+
+	gnmDrawCmdSetPrimitiveType( cmd, GNM_PT_RECTLIST );
+	gnmDrawCmdDrawIndexAuto( cmd, 3 );
+
 	gnmDrawCmdWaitGraphicsWrite( cmd, GNM_ACQUIRE_TARGET_CB0 | GNM_ACQUIRE_TARGET_DB );
 }
 
@@ -378,18 +426,20 @@ static bool stage_triangle( MemoryAllocator *garlic )
 	printf( "=== stage B: triangle (default state %s, triangle %s, clear %s)",
 		cfg( "nodefault" ) ? "off" : "on", tri ? "on" : "off", clear ? "on" : "off" );
 
-	if( !initclearutility( garlic ))
+	if( !loadvshader( &s->vs, garlic, "/app0/assets/misc/tri.vert.sb" ) || !loadpshader( &s->ps, garlic, "/app0/assets/misc/tri.frag.sb" )
+		|| !loadpshader( &s->clearps, garlic, "/app0/assets/misc/clear.frag.sb" ))
 	{
-		printf( "B: FAIL, clear shader not loaded" );
+		printf( "B: FAIL, shaders not loaded" );
 		return false;
 	}
-
-	if( !loadvshader( &s->vs, garlic, "/app0/assets/misc/tri.vert.sb" ) || !loadpshader( &s->ps, garlic, "/app0/assets/misc/tri.frag.sb" ))
+	s->clearreg = find_table_register( gnmPsShaderInputUsageSlotTable( s->clearps ), s->clearps->common.numinputusageslots );
+	printf( "B: shaders loaded, vs exports %u, ps inputs %u, clear resource table in user SGPR %d",
+		s->vs->numexportsemantics, s->ps->numinputsemantics, s->clearreg );
+	if( s->clearreg < 0 )
 	{
-		printf( "B: FAIL, triangle shaders not loaded" );
+		printf( "B: FAIL, clear shader has no resource table slot" );
 		return false;
 	}
-	printf( "B: shaders loaded, vs exports %u, ps inputs %u", s->vs->numexportsemantics, s->ps->numinputsemantics );
 
 	if( !displayctx_init( &s->display ))
 	{
