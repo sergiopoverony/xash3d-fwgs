@@ -374,6 +374,16 @@ static void PS4_SetupDataDir( void )
 
 	PS4_Log( "Xash3D FWGS PS4: base directory %s, stat layout %s\n", ps4_basedir, PS4_GetStatLayout( ));
 
+	// libraries (SDL port in particular) print to stdout directly, which crashes
+	// without valid descriptor behind it, so send it to the same log, unbuffered
+	if( freopen( ps4_logpath, "a", stdout ))
+		setvbuf( stdout, NULL, _IONBF, 0 );
+	else
+		PS4_Log( "can't redirect stdout: %s\n", strerror( errno ));
+
+	if( freopen( ps4_logpath, "a", stderr ))
+		setvbuf( stderr, NULL, _IONBF, 0 );
+
 	// emulated by platform/ps4/compat/ps4_cwd.c, so relative paths work in engine image too
 	if( chdir( ps4_basedir ) < 0 )
 		PS4_Log( "chdir %s failed: %s\n", ps4_basedir, strerror( errno ));
