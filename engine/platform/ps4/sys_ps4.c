@@ -60,6 +60,35 @@ static void SDLCALL PS4_SDLLog( void *userdata, int category, SDL_LogPriority pr
 // platform/ps4/compat/ps4_cwd.c
 const char *PS4_GetStatLayout( void );
 
+// platform/ps4/compat/ps4_stdio.c
+extern void ( *ps4_stdout_hook )( const char *text, size_t len );
+
+/*
+==================
+PS4_LogWrite
+
+Appends raw text to log file, also receives stdout and stderr, see ps4_stdio.c
+==================
+*/
+static void PS4_LogWrite( const char *text, size_t len )
+{
+	int fd;
+
+	if( !ps4_logpath[0] )
+		return;
+
+	fd = open( ps4_logpath, O_WRONLY | O_CREAT | O_APPEND, 0666 );
+	if( fd < 0 )
+		return;
+
+	if( write( fd, text, len ) < 0 )
+	{
+		// nothing we can do
+	}
+
+	close( fd );
+}
+
 /*
 ==================
 PS4_Log
@@ -71,7 +100,7 @@ void PS4_Log( const char *fmt, ... )
 {
 	char buf[2048];
 	va_list va;
-	int fd, len;
+	int len;
 
 	if( !ps4_logpath[0] )
 		return;
@@ -88,16 +117,7 @@ void PS4_Log( const char *fmt, ... )
 	if( len >= (int)sizeof( buf ))
 		len = sizeof( buf ) - 1;
 
-	fd = open( ps4_logpath, O_WRONLY | O_CREAT | O_APPEND, 0666 );
-	if( fd < 0 )
-		return;
-
-	if( write( fd, buf, len ) < 0 )
-	{
-		// nothing we can do
-	}
-
-	close( fd );
+	PS4_LogWrite( buf, len );
 }
 
 /*
@@ -376,30 +396,9 @@ static void PS4_SetupDataDir( void )
 
 	PS4_Log( "Xash3D FWGS PS4: base directory %s, stat layout %s\n", ps4_basedir, PS4_GetStatLayout( ));
 
-	// libraries (SDL port in particular) print to stdout directly, which crashes
-	// without valid descriptor behind it, so send it to the same log, unbuffered
-	// freopen isn't used here: when it fails, musl closes the original stream
-	// and the next printf crashes on null buffer pointers
-	{
-		int fd = open( ps4_logpath, O_WRONLY | O_CREAT | O_APPEND, 0666 );
-
-		if( fd >= 0 )
-		{
-			if( fd != STDOUT_FILENO && dup2( fd, STDOUT_FILENO ) < 0 )
-				PS4_Log( "can't redirect stdout: %s\n", strerror( errno ));
-
-			if( fd != STDERR_FILENO && dup2( fd, STDERR_FILENO ) < 0 )
-				PS4_Log( "can't redirect stderr: %s\n", strerror( errno ));
-
-			if( fd > STDERR_FILENO )
-				close( fd );
-		}
-		else PS4_Log( "can't open %s: %s\n", ps4_logpath, strerror( errno ));
-
-		// even if redirection failed, unbuffered stream just drops the output
-		setvbuf( stdout, NULL, _IONBF, 0 );
-		setvbuf( stderr, NULL, _IONBF, 0 );
-	}
+	// libraries (SDL port in particular) print to stdout directly,
+	// applications can't redirect it, so it's captured by ps4_stdio.c
+	ps4_stdout_hook = PS4_LogWrite;
 
 	// emulated by platform/ps4/compat/ps4_cwd.c, so relative paths work in engine image too
 	if( chdir( ps4_basedir ) < 0 )

@@ -28,7 +28,12 @@ PS4_WRAPPED_FUNCS = ['open', 'fopen', 'stat', 'lstat', 'fstat', 'opendir', 'mkdi
 	'unlink', 'rmdir', 'access', 'chdir', 'getcwd', 'realpath', 'fcntl',
 	# memory allocation goes to the process heap in eboot.bin, see ps4_malloc.c
 	'malloc', 'free', 'calloc', 'realloc', 'memalign', 'aligned_alloc', 'valloc', 'posix_memalign',
-	'malloc_usable_size']
+	'malloc_usable_size',
+	# standard output is made thread safe, see ps4_stdio.c
+	'printf', 'vprintf', 'fprintf', 'vfprintf', 'puts', 'fputs', 'putchar', 'fputc', 'putc', 'fwrite']
+
+PS4_MALLOC_FUNCS = ['malloc', 'free', 'calloc', 'realloc', 'memalign', 'aligned_alloc', 'valloc',
+	'posix_memalign', 'malloc_usable_size']
 
 def configure(conf):
 	toolchain = conf.env.PS4_TOOLCHAIN
@@ -42,10 +47,12 @@ def configure(conf):
 	# ps4_cwd.c - working directory emulation
 	# ps4_crtlib.c - module startup code, replaces broken crtlib.o from the toolchain
 	# ps4_malloc.c - process-wide heap
+	# ps4_stdio.c - thread safe standard output
 	# engine and hlsdk-portable keep them in different places
 	# (object name, source, extra flags)
 	objects = [
 		('cwd', 'ps4_cwd', []),
+		('stdio', 'ps4_stdio', []),
 		('crtlib', 'ps4_crtlib', []),
 		('malloc', 'ps4_malloc', []),
 		('malloc_module', 'ps4_malloc', ['-DPS4_MODULE=1']),
@@ -73,7 +80,9 @@ def configure(conf):
 
 	# diagnostic switch: PS4_NO_MALLOC_WRAP=1 keeps original per-image musl malloc
 	conf.env.PS4_MALLOC_WRAP = not os.environ.get('PS4_NO_MALLOC_WRAP')
-	funcs = PS4_WRAPPED_FUNCS if conf.env.PS4_MALLOC_WRAP else PS4_WRAPPED_FUNCS[:PS4_WRAPPED_FUNCS.index('malloc')]
+	funcs = PS4_WRAPPED_FUNCS
+	if not conf.env.PS4_MALLOC_WRAP:
+		funcs = [i for i in funcs if i not in PS4_MALLOC_FUNCS]
 	conf.msg('PS4 shared locked heap', conf.env.PS4_MALLOC_WRAP)
 	conf.env.PS4_WRAP_FLAGS = ['-Wl,--wrap=%s' % i for i in funcs]
 
@@ -97,7 +106,7 @@ def ps4_add_runtime(self):
 		if self.env.PS4_MALLOC_WRAP:
 			# eboot.bin owns the process heap, modules find it at runtime
 			flags += [self.env.PS4_RT_MALLOC]
-	flags += [self.env.PS4_RT_CWD]
+	flags += [self.env.PS4_RT_CWD, self.env.PS4_RT_STDIO]
 	flags += self.env.PS4_WRAP_FLAGS
 	if is_cxx:
 		flags += ['-lc++']
@@ -113,7 +122,7 @@ def ps4_runtime_deps(self):
 	if self.env.DEST_OS != 'ps4' or not getattr(self, 'link_task', None):
 		return
 
-	for key in ['PS4_RT_CWD', 'PS4_RT_CRTLIB', 'PS4_RT_MALLOC', 'PS4_RT_MALLOC_MODULE']:
+	for key in ['PS4_RT_CWD', 'PS4_RT_STDIO', 'PS4_RT_CRTLIB', 'PS4_RT_MALLOC', 'PS4_RT_MALLOC_MODULE']:
 		path = self.env[key]
 		if path:
 			node = self.bld.root.find_node(path)
