@@ -179,6 +179,16 @@ void *PS4_dlopen( const char *name, int flags )
 
 	PS4_Log( "loaded module %s: 0x%x\n", path, handle );
 
+	// run global constructors, our startup code exports this, see compat/ps4_crtlib.c
+	{
+		void ( *init )( void ) = NULL;
+
+		if( sceKernelDlsym( handle, "__ps4_module_init", (void **)&init ) >= 0 && init )
+			init( );
+		else
+			PS4_Log( "warning: %s has no __ps4_module_init, global constructors may not run\n", path );
+	}
+
 	return (void *)(intptr_t)( handle + 1 );
 }
 
@@ -445,11 +455,6 @@ llvm-addr2line on unstripped ELF from build directory
 #define PS4_SIGSEGV    11
 #define PS4_SA_SIGINFO 0x40
 
-// FreeBSD amd64 ucontext_t: 16 bytes of sigset, then mcontext with 8 byte registers
-#define PS4_MC_RBP 9
-#define PS4_MC_RIP 20
-#define PS4_MC_RSP 23
-
 #define PS4_MAX_MODULES 128
 
 static OrbisKernelModuleInfo ps4_modules[PS4_MAX_MODULES];
@@ -500,7 +505,7 @@ static qboolean PS4_AddrToModule( uintptr_t addr, const char **name, uintptr_t *
 	return false;
 }
 
-static void PS4_LogAddr( const char *prefix, uintptr_t addr )
+MAYBE_UNUSED static void PS4_LogAddr( const char *prefix, uintptr_t addr )
 {
 	const char *name;
 	uintptr_t offset;
@@ -513,26 +518,38 @@ static void PS4_LogAddr( const char *prefix, uintptr_t addr )
 
 static void PS4_DumpContext( void *context )
 {
-	const uint64_t *regs = (const uint64_t *)((const byte *)context + 16 );
+	const uint64_t *ctx = (const uint64_t *)context;
+	uintptr_t here = (uintptr_t)&ctx;
 	const uintptr_t *stack;
 	int found = 0;
 
 	PS4_CollectModules( );
 
-	PS4_LogAddr( "rip", regs[PS4_MC_RIP] );
-	PS4_LogAddr( "rbp", regs[PS4_MC_RBP] );
-	PS4_Log( "rsp 0x%016lx\n", (unsigned long)regs[PS4_MC_RSP] );
+	// ucontext layout isn't documented, so print every word that points into module code
+	// with its index, instruction pointer is one of the first ones
+	if( context )
+	{
+		for( int i = 0; i < 48; i++ )
+		{
+			const char *name;
+			uintptr_t offset;
 
-	// frame pointers are usually omitted, so scan stack for return addresses
-	stack = (const uintptr_t *)regs[PS4_MC_RSP];
-	for( int i = 0; i < 512 && found < 24; i++ )
+			if( PS4_AddrToModule( ctx[i], &name, &offset ))
+				PS4_Log( "ctx[%2d] 0x%016lx %s+0x%lx\n", i, (unsigned long)ctx[i], name, (unsigned long)offset );
+		}
+	}
+
+	// handler runs on the same stack below the interrupted frame, so walk up from here
+	// and print everything that looks like return address
+	stack = (const uintptr_t *)( here & ~(uintptr_t)7 );
+	for( int i = 0; i < 4096 && found < 40; i++ )
 	{
 		const char *name;
 		uintptr_t offset;
 
 		if( PS4_AddrToModule( stack[i], &name, &offset ))
 		{
-			PS4_Log( "  stack[%3d] %s+0x%lx\n", i, name, (unsigned long)offset );
+			PS4_Log( "  stack[%4d] %s+0x%lx\n", i, name, (unsigned long)offset );
 			found++;
 		}
 	}
