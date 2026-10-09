@@ -17,8 +17,10 @@ GNU General Public License for more details.
 // so the log survives a GPU hang:
 //   A. bare submit: default hardware state + EOP label write, no shaders
 //      (same as opengnm hardware smoke test)
-//   B. triangle: per-frame command buffer with clear and a triangle drawn
-//      with shaders compiled by opengnm-psbc, flipped to the screen
+//   B. triangle: render target state, a triangle drawn with shaders compiled
+//      by opengnm-psbc and a clear are first submitted one by one, then
+//      per-frame command buffers with all of them are flipped to the screen
+// Parts of stage B can be turned off with /data/xash/gnmprobe.cfg, see load_cfg().
 // Based on the triangle sample from freegnm-examples (MIT).
 
 #include <fcntl.h>
@@ -131,9 +133,45 @@ _Noreturn void probe_exit( int code )
 		sceKernelUsleep( 1000000 );
 }
 
+static char probe_cfg[256];
+
+// /data/xash/gnmprobe.cfg: words that turn parts of stage B off without rebuilding,
+// "nodefault" - no default hardware state, "notri" - no triangle, "noclear" - no clear
+static void load_cfg( void )
+{
+	int fd = sceKernelOpen( LOG_DIR "/gnmprobe.cfg", O_RDONLY, 0 );
+	int n;
+	char *p;
+
+	if( fd < 0 )
+	{
+		printf( "config: none" );
+		return;
+	}
+
+	n = sceKernelRead( fd, probe_cfg, sizeof( probe_cfg ) - 1 );
+	sceKernelClose( fd );
+	probe_cfg[n > 0 ? n : 0] = 0;
+
+	for( p = probe_cfg; *p; p++ )
+	{
+		if( *p == '\n' || *p == '\r' )
+			*p = ' ';
+	}
+
+	printf( "config: %s", probe_cfg );
+}
+
+static bool cfg( const char *word )
+{
+	return strstr( probe_cfg, word ) != NULL;
+}
+
+// logs a heartbeat while waiting: if heartbeats stop, the process was killed or frozen
 static bool wait_label( volatile uint64_t *label, uint64_t value, uint64_t *waited_us )
 {
 	uint64_t start = sceKernelGetProcessTime();
+	uint64_t beat = start + 500000;
 
 	for( ;; )
 	{
@@ -150,6 +188,12 @@ static bool wait_label( volatile uint64_t *label, uint64_t value, uint64_t *wait
 		{
 			*waited_us = now - start;
 			return false;
+		}
+
+		if( now >= beat )
+		{
+			printf( "  still waiting, %llu ms, label 0x%llx", (unsigned long long)(( now - start ) / 1000 ), (unsigned long long)*label );
+			beat += 500000;
 		}
 
 		sceKernelUsleep( 50 );
@@ -224,65 +268,188 @@ static bool stage_bare_submit( MemoryAllocator *garlic )
 }
 
 // stage B: shaders, render target, flip
-static bool stage_triangle( MemoryAllocator *garlic )
+typedef struct
 {
-	const uint32_t cmdsize = 1024 * 1024;
-	volatile uint64_t *label;
 	DisplayContext display;
 	GnmRenderTarget fb;
-	GnmVsShader *vs = NULL;
-	GnmPsShader *ps = NULL;
+	GnmVsShader *vs;
+	GnmPsShader *ps;
 	void *cmdmem;
+	uint32_t cmdsize;
+	volatile uint64_t *label;
+} scene_t;
+
+static GnmCommandBuffer begin_cmd( scene_t *s )
+{
+	GnmCommandBuffer cmd = gnmCmdInit( s->cmdmem, s->cmdsize, NULL, NULL );
+
+	if( !cfg( "nodefault" ))
+		gnmDrawCmdInitDefaultHardwareState( &cmd );
+
+	return cmd;
+}
+
+static void emit_target( scene_t *s, GnmCommandBuffer *cmd )
+{
+	const GnmPrimitiveSetup primsetup = {
+		.cullmode = GNM_CULL_NONE,
+		.frontface = GNM_FACE_CCW,
+		.frontmode = GNM_FILL_SOLID,
+		.backmode = GNM_FILL_SOLID,
+		.provokemode = GNM_PROVOKINGVTX_FIRST,
+	};
+
+	gnmDrawCmdSetPrimitiveSetup( cmd, &primsetup );
+	gnmDrawCmdSetRenderTarget( cmd, 0, &s->fb );
+	gnmDrawCmdSetRenderTargetMask( cmd, 0xf );
+	setupviewport( cmd, 0, 0, s->display.screenw, s->display.screenh, 0.5f, 0.5f );
+}
+
+static void emit_triangle( scene_t *s, GnmCommandBuffer *cmd )
+{
+	gnmDrawCmdSetVsShader( cmd, &s->vs->registers, 0 );
+	gnmDrawCmdSetPsShader( cmd, &s->ps->registers );
+	gnmDrawCmdSetPsInputUsage( cmd, gnmVsShaderExportSemanticTable( s->vs ), s->vs->numexportsemantics,
+		gnmPsShaderInputSemanticTable( s->ps ), s->ps->numinputsemantics );
+	gnmDrawCmdSetPrimitiveType( cmd, GNM_PT_TRILIST );
+	gnmDrawCmdDrawIndexAuto( cmd, 3 );
+}
+
+static void emit_clear( scene_t *s, GnmCommandBuffer *cmd, const float color[4] )
+{
+	clearcolortarget( cmd, &s->fb, color );
+	gnmDrawCmdWaitGraphicsWrite( cmd, GNM_ACQUIRE_TARGET_CB0 | GNM_ACQUIRE_TARGET_DB );
+}
+
+// name is logged before submit, so after a crash the last line tells what killed it
+static bool submit_and_wait( scene_t *s, const char *name, GnmCommandBuffer *cmd, bool verbose, uint64_t *waited )
+{
+	void *dcb[1];
+	uint32_t dcbsize[1];
+	uint64_t w;
+	int res;
+
+	gnmDrawCmdEventWriteEop( cmd, GNM_CACHE_FLUSH_AND_INV_TS_EVENT, (uint64_t)(uintptr_t)s->label, GNM_DATA_SEL_SEND_DATA64, 1 );
+	dcb[0] = cmd->beginptr;
+	dcbsize[0] = (uint32_t)((uintptr_t)cmd->cmdptr - (uintptr_t)cmd->beginptr );
+	*s->label = 0;
+
+	if( verbose )
+		printf( "%s: submitting %u bytes", name, dcbsize[0] );
+
+	res = sceGnmSubmitCommandBuffers( 1, dcb, dcbsize, NULL, NULL );
+	if( res < 0 )
+	{
+		printf( "%s: FAIL, submit = 0x%x", name, res );
+		return false;
+	}
+
+	if( !wait_label( s->label, 1, &w ))
+	{
+		printf( "%s: FAIL, GPU did not finish in %llu us", name, (unsigned long long)w );
+		return false;
+	}
+
+	res = sceGnmSubmitDone();
+	if( res < 0 )
+	{
+		printf( "%s: FAIL, sceGnmSubmitDone = 0x%x", name, res );
+		return false;
+	}
+
+	if( verbose )
+		printf( "%s: OK in %llu us", name, (unsigned long long)w );
+	if( waited )
+		*waited = w;
+	return true;
+}
+
+static bool stage_triangle( MemoryAllocator *garlic )
+{
+	static scene_t scene;
+	scene_t *s = &scene;
+	const bool tri = !cfg( "notri" ), clear = !cfg( "noclear" );
+	const float white[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
 	uint64_t max_wait = 0, total_wait = 0;
 	uint64_t start;
+	GnmCommandBuffer cmd;
 	int frame;
 
-	printf( "=== stage B: triangle" );
+	printf( "=== stage B: triangle (default state %s, triangle %s, clear %s)",
+		cfg( "nodefault" ) ? "off" : "on", tri ? "on" : "off", clear ? "on" : "off" );
 
 	if( !initclearutility( garlic ))
 	{
 		printf( "B: FAIL, clear shader not loaded" );
 		return false;
 	}
-	printf( "B: clear shader loaded" );
 
-	if( !loadvshader( &vs, garlic, "/app0/assets/misc/tri.vert.sb" ) || !loadpshader( &ps, garlic, "/app0/assets/misc/tri.frag.sb" ))
+	if( !loadvshader( &s->vs, garlic, "/app0/assets/misc/tri.vert.sb" ) || !loadpshader( &s->ps, garlic, "/app0/assets/misc/tri.frag.sb" ))
 	{
 		printf( "B: FAIL, triangle shaders not loaded" );
 		return false;
 	}
-	printf( "B: triangle shaders loaded, vs exports %u, ps inputs %u", vs->numexportsemantics, ps->numinputsemantics );
+	printf( "B: shaders loaded, vs exports %u, ps inputs %u", s->vs->numexportsemantics, s->ps->numinputsemantics );
 
-	memset( &display, 0, sizeof( display ));
-	if( !displayctx_init( &display ))
+	if( !displayctx_init( &s->display ))
 	{
 		printf( "B: FAIL, VideoOut init" );
 		return false;
 	}
-	printf( "B: VideoOut handle %d, resolution %ux%u", display.videohandle, display.screenw, display.screenh );
+	printf( "B: VideoOut handle %d, resolution %ux%u", s->display.videohandle, s->display.screenw, s->display.screenh );
 
-	memset( &fb, 0, sizeof( fb ));
-	if( !initcolortarget( &fb, garlic, display.screenw, display.screenh, GNM_FMT_R8G8B8A8_SRGB, gnmGpuMode()))
+	if( !initcolortarget( &s->fb, garlic, s->display.screenw, s->display.screenh, GNM_FMT_R8G8B8A8_SRGB, gnmGpuMode()))
 	{
 		printf( "B: FAIL, color render target" );
 		return false;
 	}
-	printf( "B: render target %ux%u pitch %u at %p", fb.size.width, fb.size.height, gnmRtGetPitch( &fb ), gnmRtGetBaseAddr( &fb ));
+	printf( "B: render target %ux%u pitch %u at %p", s->fb.size.width, s->fb.size.height, gnmRtGetPitch( &s->fb ), gnmRtGetBaseAddr( &s->fb ));
 
-	if( !displayctx_setrts( &display, &fb, 1 ))
+	if( !displayctx_setrts( &s->display, &s->fb, 1 ))
 	{
 		printf( "B: FAIL, VideoOut buffer registration" );
 		return false;
 	}
-	printf( "B: VideoOut buffer registered" );
 
-	cmdmem = memalloc_alloc( garlic, cmdsize, GNM_ALIGNMENT_BUFFER_BYTES );
-	label = memalloc_alloc( garlic, sizeof( uint64_t ), sizeof( uint64_t ));
-	if( !cmdmem || !label )
+	s->cmdsize = 1024 * 1024;
+	s->cmdmem = memalloc_alloc( garlic, s->cmdsize, GNM_ALIGNMENT_BUFFER_BYTES );
+	s->label = memalloc_alloc( garlic, sizeof( uint64_t ), sizeof( uint64_t ));
+	if( !s->cmdmem || !s->label )
 	{
 		printf( "B: FAIL, garlic allocation" );
 		return false;
 	}
+
+	// each part separately first
+	cmd = begin_cmd( s );
+	emit_target( s, &cmd );
+	if( !submit_and_wait( s, "B1 state", &cmd, true, NULL ))
+		return false;
+
+	if( tri )
+	{
+		cmd = begin_cmd( s );
+		emit_target( s, &cmd );
+		emit_triangle( s, &cmd );
+		if( !submit_and_wait( s, "B2 triangle", &cmd, true, NULL ))
+			return false;
+	}
+
+	if( clear )
+	{
+		cmd = begin_cmd( s );
+		emit_clear( s, &cmd, white );
+		if( !submit_and_wait( s, "B3 clear", &cmd, true, NULL ))
+			return false;
+	}
+
+	// what is drawn so far goes to the screen
+	if( !displayctx_flip( &s->display, 0 ))
+	{
+		printf( "B: FAIL, first flip" );
+		return false;
+	}
+	printf( "B: first flip OK, hide splash = 0x%x", sceSystemServiceHideSplashScreen());
 
 	start = sceKernelGetProcessTime();
 
@@ -290,54 +457,19 @@ static bool stage_triangle( MemoryAllocator *garlic )
 	{
 		// background cycles through colors, so a frozen picture is visible
 		const float t = (float)( frame % 120 ) / 120.0f;
-		const float clearcolor[4] = { t, 0.2f, 1.0f - t, 1.0f };
-		const GnmPrimitiveSetup primsetup = {
-			.cullmode = GNM_CULL_NONE,
-			.frontface = GNM_FACE_CCW,
-			.frontmode = GNM_FILL_SOLID,
-			.backmode = GNM_FILL_SOLID,
-			.provokemode = GNM_PROVOKINGVTX_FIRST,
-		};
-		GnmCommandBuffer cmd = gnmCmdInit( cmdmem, cmdsize, NULL, NULL );
-		void *dcb[1];
-		uint32_t dcbsize[1];
+		const float color[4] = { t, 0.2f, 1.0f - t, 1.0f };
 		uint64_t waited;
-		int res;
 
-		*label = 0;
+		cmd = begin_cmd( s );
+		if( clear )
+			emit_clear( s, &cmd, color );
+		emit_target( s, &cmd );
+		if( tri )
+			emit_triangle( s, &cmd );
 
-		gnmDrawCmdInitDefaultHardwareState( &cmd );
-
-		clearcolortarget( &cmd, &fb, clearcolor );
-		gnmDrawCmdWaitGraphicsWrite( &cmd, GNM_ACQUIRE_TARGET_CB0 | GNM_ACQUIRE_TARGET_DB );
-
-		gnmDrawCmdSetPrimitiveSetup( &cmd, &primsetup );
-		gnmDrawCmdSetRenderTarget( &cmd, 0, &fb );
-		gnmDrawCmdSetRenderTargetMask( &cmd, 0xf );
-		setupviewport( &cmd, 0, 0, display.screenw, display.screenh, 0.5f, 0.5f );
-
-		gnmDrawCmdSetVsShader( &cmd, &vs->registers, 0 );
-		gnmDrawCmdSetPsShader( &cmd, &ps->registers );
-		gnmDrawCmdSetPsInputUsage( &cmd, gnmVsShaderExportSemanticTable( vs ), vs->numexportsemantics,
-			gnmPsShaderInputSemanticTable( ps ), ps->numinputsemantics );
-
-		gnmDrawCmdSetPrimitiveType( &cmd, GNM_PT_TRILIST );
-		gnmDrawCmdDrawIndexAuto( &cmd, 3 );
-
-		gnmDrawCmdEventWriteEop( &cmd, GNM_CACHE_FLUSH_AND_INV_TS_EVENT, (uint64_t)(uintptr_t)label, GNM_DATA_SEL_SEND_DATA64, 1 );
-
-		dcb[0] = cmd.beginptr;
-		dcbsize[0] = (uint32_t)((uintptr_t)cmd.cmdptr - (uintptr_t)cmd.beginptr );
-
-		res = sceGnmSubmitCommandBuffers( 1, dcb, dcbsize, NULL, NULL );
-		if( frame == 0 || res < 0 )
-			printf( "B: frame %d: command buffer %u bytes, submit = 0x%x", frame, dcbsize[0], res );
-		if( res < 0 )
-			return false;
-
-		if( !wait_label( label, 1, &waited ))
+		if( !submit_and_wait( s, "B4 frame", &cmd, frame == 0, &waited ))
 		{
-			printf( "B: FAIL, frame %d: GPU did not finish in %llu us", frame, (unsigned long long)waited );
+			printf( "B: failed at frame %d", frame );
 			return false;
 		}
 
@@ -345,19 +477,11 @@ static bool stage_triangle( MemoryAllocator *garlic )
 		if( waited > max_wait )
 			max_wait = waited;
 
-		if( !displayctx_flip( &display, 0 ))
+		if( !displayctx_flip( &s->display, 0 ))
 		{
 			printf( "B: FAIL, frame %d: flip", frame );
 			return false;
 		}
-
-		res = sceGnmSubmitDone();
-		if( frame == 0 || res < 0 )
-			printf( "B: frame %d: sceGnmSubmitDone = 0x%x", frame, res );
-
-		// picture is on screen, the system splash can go away
-		if( frame == 1 )
-			printf( "B: hide splash = 0x%x", sceSystemServiceHideSplashScreen());
 
 		if( frame % 120 == 0 )
 			printf( "B: frame %d, GPU time %llu us", frame, (unsigned long long)waited );
@@ -367,7 +491,7 @@ static bool stage_triangle( MemoryAllocator *garlic )
 		(unsigned long long)(( sceKernelGetProcessTime() - start ) / 1000 ),
 		(unsigned long long)( total_wait / FRAMES ), (unsigned long long)max_wait );
 
-	displayctx_destroy( &display );
+	displayctx_destroy( &s->display );
 	return true;
 }
 
@@ -379,6 +503,7 @@ int main( void )
 	log_open();
 	printf( "gnm-probe started" );
 	log_system_info();
+	load_cfg();
 
 	garlic = memalloc_init( 64 * 1024 * 1024,
 		ORBIS_KERNEL_PROT_CPU_READ | ORBIS_KERNEL_PROT_CPU_RW | ORBIS_KERNEL_PROT_GPU_READ | ORBIS_KERNEL_PROT_GPU_WRITE,
