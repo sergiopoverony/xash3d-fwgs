@@ -403,7 +403,14 @@ static int find_table_register( const GnmInputUsageSlot *slots, unsigned count )
 
 // like clearcolortarget() from freegnm-examples, but with correct resource table register
 // and our own fullscreen VS instead of the firmware embedded one
-static void emit_clear( scene_t *s, GnmCommandBuffer *cmd, const float color[4] )
+// parts of the clear, B3 adds them one by one to find which one kills the process
+#define CLEAR_TABLE ( 1 << 0 ) // resource table pointer in user SGPR
+#define CLEAR_ALLOC ( 1 << 1 ) // color data allocated inside the command buffer
+#define CLEAR_DB    ( 1 << 2 ) // depth/stencil controls
+#define CLEAR_WAIT  ( 1 << 3 ) // wait for color and depth writes
+#define CLEAR_ALL   ( CLEAR_TABLE | CLEAR_ALLOC | CLEAR_DB | CLEAR_WAIT )
+
+static void emit_clear( scene_t *s, GnmCommandBuffer *cmd, const float color[4], int parts )
 {
 	const GnmDbRenderControl dbrenderctrl = { 0 };
 	const GnmDepthStencilControl depthstencilctrl = {
@@ -411,25 +418,34 @@ static void emit_clear( scene_t *s, GnmCommandBuffer *cmd, const float color[4] 
 		.stencilfunc = GNM_DEPTH_COMPARE_NEVER,
 		.stencilbackfunc = GNM_DEPTH_COMPARE_NEVER,
 	};
-	float *colorbuf;
-	GnmBuffer *table;
 	int i;
 
-	gnmDrawCmdSetDbRenderControl( cmd, &dbrenderctrl );
-	gnmDrawCmdSetDepthStencilControl( cmd, &depthstencilctrl );
+	if( parts & CLEAR_DB )
+	{
+		gnmDrawCmdSetDbRenderControl( cmd, &dbrenderctrl );
+		gnmDrawCmdSetDepthStencilControl( cmd, &depthstencilctrl );
+	}
 
 	gnmDrawCmdSetVsShader( cmd, &s->fullvs->registers, 0 );
 	gnmDrawCmdSetPsShader( cmd, &s->clearps->registers );
 	gnmDrawCmdSetPsInputUsage( cmd, gnmVsShaderExportSemanticTable( s->fullvs ), s->fullvs->numexportsemantics,
 		gnmPsShaderInputSemanticTable( s->clearps ), s->clearps->numinputsemantics );
 
-	// constant buffer with color lives inside the command buffer, the table with its descriptor below 4 GB
-	colorbuf = gnmCmdAllocInside( cmd, sizeof( float ) * 4, 4 );
-	table = lowpool_alloc( &s->low, sizeof( GnmBuffer ), 16 );
-	for( i = 0; i < 4; i++ )
-		colorbuf[i] = color[i];
-	*table = gnmCreateConstBuffer( colorbuf, sizeof( float ) * 4 );
-	gnmDrawCmdSetPointerUserData( cmd, GNM_STAGE_PS, s->clearreg, table );
+	if( parts & CLEAR_TABLE )
+	{
+		// table with the descriptor is below 4 GB, color data inside the command buffer or in the same pool
+		float *colorbuf = ( parts & CLEAR_ALLOC ) ? gnmCmdAllocInside( cmd, sizeof( float ) * 4, 4 ) : lowpool_alloc( &s->low, sizeof( float ) * 4, 16 );
+		GnmBuffer *table = lowpool_alloc( &s->low, sizeof( GnmBuffer ), 16 );
+
+		for( i = 0; i < 4; i++ )
+			colorbuf[i] = color[i];
+		*table = gnmCreateConstBuffer( colorbuf, sizeof( float ) * 4 );
+		gnmDrawCmdSetPointerUserData( cmd, GNM_STAGE_PS, s->clearreg, table );
+	}
+	else if( parts & CLEAR_ALLOC )
+	{
+		gnmCmdAllocInside( cmd, sizeof( float ) * 4, 4 );
+	}
 
 	setupviewport( cmd, 0, 0, s->fb.size.width, s->fb.size.height, 0.5f, 0.5f );
 	gnmDrawCmdSetRenderTarget( cmd, 0, &s->fb );
@@ -438,7 +454,8 @@ static void emit_clear( scene_t *s, GnmCommandBuffer *cmd, const float color[4] 
 	gnmDrawCmdSetPrimitiveType( cmd, GNM_PT_TRILIST );
 	gnmDrawCmdDrawIndexAuto( cmd, 3 );
 
-	gnmDrawCmdWaitGraphicsWrite( cmd, GNM_ACQUIRE_TARGET_CB0 | GNM_ACQUIRE_TARGET_DB );
+	if( parts & CLEAR_WAIT )
+		gnmDrawCmdWaitGraphicsWrite( cmd, GNM_ACQUIRE_TARGET_CB0 | GNM_ACQUIRE_TARGET_DB );
 }
 
 // name is logged before submit, so after a crash the last line tells what killed it
@@ -567,10 +584,22 @@ static bool stage_triangle( MemoryAllocator *garlic )
 
 	if( clear )
 	{
-		cmd = begin_cmd( s );
-		emit_clear( s, &cmd, white );
-		if( !submit_and_wait( s, "B3 clear", &cmd, true, NULL ))
-			return false;
+		static const struct { const char *name; int parts; } steps[] = {
+			{ "B3a clear: draw only", 0 },
+			{ "B3b clear: + resource table", CLEAR_TABLE },
+			{ "B3c clear: + data in command buffer", CLEAR_TABLE | CLEAR_ALLOC },
+			{ "B3d clear: + depth/stencil controls", CLEAR_TABLE | CLEAR_ALLOC | CLEAR_DB },
+			{ "B3e clear: + wait for writes", CLEAR_ALL },
+		};
+		size_t i;
+
+		for( i = 0; i < sizeof( steps ) / sizeof( steps[0] ); i++ )
+		{
+			cmd = begin_cmd( s );
+			emit_clear( s, &cmd, white, steps[i].parts );
+			if( !submit_and_wait( s, steps[i].name, &cmd, true, NULL ))
+				return false;
+		}
 	}
 
 	// what is drawn so far goes to the screen
@@ -592,7 +621,7 @@ static bool stage_triangle( MemoryAllocator *garlic )
 
 		cmd = begin_cmd( s );
 		if( clear )
-			emit_clear( s, &cmd, color );
+			emit_clear( s, &cmd, color, CLEAR_ALL );
 		emit_target( s, &cmd );
 		if( tri )
 			emit_triangle( s, &cmd );
