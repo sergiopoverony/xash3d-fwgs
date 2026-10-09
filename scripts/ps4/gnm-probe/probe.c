@@ -274,6 +274,7 @@ typedef struct
 	GnmRenderTarget fb;
 	GnmVsShader *vs;
 	GnmPsShader *ps;
+	GnmVsShader *fullvs;   // fullscreen triangle, firmware embedded VS faults on newer firmware
 	GnmPsShader *clearps;
 	int clearreg; // user SGPR with pointer to resource table of clear shader
 	void *cmdmem;
@@ -332,7 +333,8 @@ static int find_table_register( const GnmInputUsageSlot *slots, unsigned count )
 	return -1;
 }
 
-// same as clearcolortarget() from freegnm-examples, but with correct resource table register
+// like clearcolortarget() from freegnm-examples, but with correct resource table register
+// and our own fullscreen VS instead of the firmware embedded one
 static void emit_clear( scene_t *s, GnmCommandBuffer *cmd, const float color[4] )
 {
 	const GnmDbRenderControl dbrenderctrl = { 0 };
@@ -348,8 +350,10 @@ static void emit_clear( scene_t *s, GnmCommandBuffer *cmd, const float color[4] 
 	gnmDrawCmdSetDbRenderControl( cmd, &dbrenderctrl );
 	gnmDrawCmdSetDepthStencilControl( cmd, &depthstencilctrl );
 
-	gnmDrawCmdSetEmbeddedVsShader( cmd, GNM_EMBEDDED_VSH_FULLSCREEN, 0 );
+	gnmDrawCmdSetVsShader( cmd, &s->fullvs->registers, 0 );
 	gnmDrawCmdSetPsShader( cmd, &s->clearps->registers );
+	gnmDrawCmdSetPsInputUsage( cmd, gnmVsShaderExportSemanticTable( s->fullvs ), s->fullvs->numexportsemantics,
+		gnmPsShaderInputSemanticTable( s->clearps ), s->clearps->numinputsemantics );
 
 	// constant buffer with color and the table with its descriptor live inside the command buffer
 	colorbuf = gnmCmdAllocInside( cmd, sizeof( float ) * 4, 4 );
@@ -363,7 +367,7 @@ static void emit_clear( scene_t *s, GnmCommandBuffer *cmd, const float color[4] 
 	gnmDrawCmdSetRenderTarget( cmd, 0, &s->fb );
 	gnmDrawCmdSetRenderTargetMask( cmd, 0xf );
 
-	gnmDrawCmdSetPrimitiveType( cmd, GNM_PT_RECTLIST );
+	gnmDrawCmdSetPrimitiveType( cmd, GNM_PT_TRILIST );
 	gnmDrawCmdDrawIndexAuto( cmd, 3 );
 
 	gnmDrawCmdWaitGraphicsWrite( cmd, GNM_ACQUIRE_TARGET_CB0 | GNM_ACQUIRE_TARGET_DB );
@@ -427,6 +431,7 @@ static bool stage_triangle( MemoryAllocator *garlic )
 		cfg( "nodefault" ) ? "off" : "on", tri ? "on" : "off", clear ? "on" : "off" );
 
 	if( !loadvshader( &s->vs, garlic, "/app0/assets/misc/tri.vert.sb" ) || !loadpshader( &s->ps, garlic, "/app0/assets/misc/tri.frag.sb" )
+		|| !loadvshader( &s->fullvs, garlic, "/app0/assets/misc/fullscreen.vert.sb" )
 		|| !loadpshader( &s->clearps, garlic, "/app0/assets/misc/clear.frag.sb" ))
 	{
 		printf( "B: FAIL, shaders not loaded" );
