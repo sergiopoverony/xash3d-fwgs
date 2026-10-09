@@ -418,3 +418,85 @@ char *__wrap_realpath( const char *path, char *resolved )
 	snprintf( resolved, 4096, "%s", buf );
 	return resolved;
 }
+
+/*
+=============================================================================
+
+	NON-BLOCKING SOCKETS
+
+PS4 kernel refuses fcntl( F_GETFL / F_SETFL ) on sockets, so neither the
+engine nor musl (socket() with SOCK_NONBLOCK, used by DNS resolver) can make
+them non-blocking. Fall back to SO_NBIO socket option and FIONBIO ioctl.
+
+=============================================================================
+*/
+#define PS4_SO_NBIO   0x1200
+#define PS4_FIONBIO   0x8004667e
+#define PS4_MAX_FDS   4096
+
+int __real_fcntl( int fd, int cmd, ... );
+int setsockopt( int fd, int level, int name, const void *value, unsigned int len );
+int ioctl( int fd, unsigned long request, ... );
+
+static unsigned char ps4_nonblock[PS4_MAX_FDS / 8];
+
+static int PS4_IsSocket( int fd )
+{
+	struct stat st;
+
+	return __wrap_fstat( fd, &st ) == 0 && S_ISSOCK( st.st_mode );
+}
+
+static int PS4_SetSocketNonBlocking( int fd, int on )
+{
+	if( setsockopt( fd, 0xffff /* SOL_SOCKET */, PS4_SO_NBIO, &on, sizeof( on )) < 0
+		&& ioctl( fd, PS4_FIONBIO, &on ) < 0 )
+		return -1;
+
+	if( fd >= 0 && fd < PS4_MAX_FDS )
+	{
+		if( on )
+			ps4_nonblock[fd / 8] |= 1 << ( fd % 8 );
+		else
+			ps4_nonblock[fd / 8] &= ~( 1 << ( fd % 8 ));
+	}
+
+	return 0;
+}
+
+int __wrap_fcntl( int fd, int cmd, ... )
+{
+	va_list va;
+	long arg;
+	int ret, saved_errno;
+
+	va_start( va, cmd );
+	arg = va_arg( va, long );
+	va_end( va );
+
+	ret = __real_fcntl( fd, cmd, arg );
+
+	if( ret >= 0 || ( cmd != F_GETFL && cmd != F_SETFL ))
+		return ret;
+
+	saved_errno = errno;
+
+	if( !PS4_IsSocket( fd ))
+	{
+		errno = saved_errno;
+		return ret;
+	}
+
+	if( cmd == F_GETFL )
+	{
+		int nonblock = fd >= 0 && fd < PS4_MAX_FDS && ( ps4_nonblock[fd / 8] & ( 1 << ( fd % 8 )));
+		return O_RDWR | ( nonblock ? O_NONBLOCK : 0 );
+	}
+
+	if( PS4_SetSocketNonBlocking( fd, ( arg & O_NONBLOCK ) ? 1 : 0 ) == 0 )
+		return 0;
+
+	errno = saved_errno;
+	return ret;
+}
+

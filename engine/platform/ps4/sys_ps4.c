@@ -28,6 +28,7 @@ GNU General Public License for more details.
 #include <orbis/libkernel.h>
 #include <orbis/UserService.h>
 #include <orbis/SystemService.h>
+#include <orbis/Net.h>
 #include "platform/ps4/dlfcn_ps4.h"
 #include <SDL.h>
 
@@ -778,7 +779,23 @@ static void SDLCALL PS4_SDLLog( void *userdata, int category, SDL_LogPriority pr
 
 void PS4_Init( void )
 {
+	OrbisNetDnsInfo dns;
+	int ret;
+
 	PS4_Log( "PS4_Init\n" );
+
+	// libSceNet must be initialized for DNS server lookup used by libc resolver
+	if(( ret = sceNetInit( )) < 0 )
+		PS4_Log( "sceNetInit failed: 0x%08x\n", ret );
+
+	memset( &dns, 0, sizeof( dns ));
+	if(( ret = sceNetGetDnsInfo( &dns, 0 )) < 0 )
+		PS4_Log( "sceNetGetDnsInfo failed: 0x%08x\n", ret );
+	else
+	{
+		const uint8_t *a = (const uint8_t *)&dns.primary_dns, *b = (const uint8_t *)&dns.secondary_dns;
+		PS4_Log( "DNS servers: %d.%d.%d.%d, %d.%d.%d.%d\n", a[0], a[1], a[2], a[3], b[0], b[1], b[2], b[3] );
+	}
 
 	// SDL's PS4 backends expect user service to be initialized
 	sceUserServiceInitialize( NULL );
