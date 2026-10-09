@@ -559,7 +559,8 @@ Key_SetDefaultGamepadBindings
 
 Configs from desktop versions of the game start with "unbindall"
 and have no gamepad bindings, which makes the game unplayable
-on consoles. If no gamepad key is bound, restore default bindings for them.
+on consoles. If main gamepad buttons are unbound, restore default
+bindings for all unbound gamepad keys.
 ===================
 */
 static qboolean Key_IsGamepadKey( int keynum )
@@ -569,7 +570,19 @@ static qboolean Key_IsGamepadKey( int keynum )
 
 void Key_SetDefaultGamepadBindings( void )
 {
+	// some gamepad keys like START can be bound by desktop configs too
+	const int main_keys[] = { K_A_BUTTON, K_B_BUTTON, K_X_BUTTON, K_Y_BUTTON, K_L1_BUTTON, K_R1_BUTTON };
 	int i;
+
+	for( i = 0; i < ARRAYSIZE( main_keys ); i++ )
+	{
+		const char *binding = Key_GetBinding( main_keys[i] );
+
+		if( binding && binding[0] )
+			return; // user has own layout
+	}
+
+	Con_Reportf( "%s: main gamepad buttons are unbound, restoring defaults\n", __func__ );
 
 	for( i = 0; i < ARRAYSIZE( keynames ); i++ )
 	{
@@ -579,15 +592,7 @@ void Key_SetDefaultGamepadBindings( void )
 			continue;
 
 		binding = Key_GetBinding( keynames[i].keynum );
-		if( binding && binding[0] )
-			return; // user has own layout
-	}
-
-	Con_Reportf( "%s: no gamepad keys are bound, restoring defaults\n", __func__ );
-
-	for( i = 0; i < ARRAYSIZE( keynames ); i++ )
-	{
-		if( Key_IsGamepadKey( keynames[i].keynum ))
+		if( !binding || !binding[0] )
 			Key_SetBinding( keynames[i].keynum, keynames[i].binding );
 	}
 }
