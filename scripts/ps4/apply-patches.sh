@@ -24,6 +24,7 @@ apply_patch()
 }
 
 apply_patch "$ROOT/3rdparty/library_suffix" "$PATCHES/library_suffix-ps4.patch"
+apply_patch "$ROOT/3rdparty/mainui" "$PATCHES/mainui-ps4.patch"
 
 # mainui keeps its own copy of build.h, keep it in sync
 cp "$ROOT/3rdparty/library_suffix/include/build.h" "$ROOT/3rdparty/library_suffix/include/buildenums.h" \

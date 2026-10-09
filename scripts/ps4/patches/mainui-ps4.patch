@@ -1,0 +1,35 @@
+diff --git a/menus/Configuration.cpp b/menus/Configuration.cpp
+index 6e0a981..c7a73f3 100644
+--- a/menus/Configuration.cpp
++++ b/menus/Configuration.cpp
+@@ -61,12 +61,16 @@ void CMenuOptions::_Init( void )
+ 		PC_AUDIO, UI_Audio_Menu, QMF_NOTIFY );
+ 	AddButton( L( "GameUI_Video" ), L( "Change screen size, video mode and gamma" ),
+ 		PC_VIDEO, UI_Video_Menu, QMF_NOTIFY );
++#if !XASH_PS4 // no touchscreen
+ 	AddButton( L( "Touch" ), L( "Change touch settings and buttons" ),
+ 		PC_TOUCH, UI_Touch_Menu, QMF_NOTIFY, 't' );
++#endif
+ 	AddButton( L( "GameUI_Joystick" ), L( "Change gamepad axis and button settings" ),
+ 		PC_GAMEPAD, UI_GamePad_Menu, QMF_NOTIFY, 'g' );
++#if !XASH_PS4 // can't open web pages
+ 	AddButton( L( "Update" ), L( "Check for updates" ),
+ 		PC_UPDATE, msgBox.MakeOpenEvent(), QMF_NOTIFY );
++#endif
+ 	AddButton( L( "Done" ), L( "Go back to the Main menu" ),
+ 		PC_DONE, VoidCb( &CMenuOptions::Hide ), QMF_NOTIFY );
+ }
+diff --git a/menus/InputDevices.cpp b/menus/InputDevices.cpp
+index 331f7db..dd522a3 100644
+--- a/menus/InputDevices.cpp
++++ b/menus/InputDevices.cpp
+@@ -120,7 +120,9 @@ void CMenuInputDevices::_Init( void )
+ 	//AddItem( banner );
+ 	AddItem( done );
+ 	AddItem( mouse );
++#if !XASH_PS4 // no touchscreen
+ 	AddItem( touch );
++#endif
+ 	AddItem( joystick );
+ #ifdef __ANDROID__
+ 	AddItem( evdev );
