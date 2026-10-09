@@ -267,6 +267,70 @@ static bool stage_bare_submit( MemoryAllocator *garlic )
 	return true;
 }
 
+// opengnm-psbc compiles shaders with address32_hi = 0: pointer to a descriptor table
+// is a single 32-bit user SGPR, so the table must be mapped below 4 GB. Buffers and
+// textures themselves can be anywhere, their descriptors hold full 48-bit addresses.
+#define LOW_POOL_SIZE ( 64 * 1024 )
+#define MAP_FIXED_NO_OVERWRITE ( 0x10 | 0x80 ) // SCE_KERNEL_MAP_FIXED | SCE_KERNEL_MAP_NO_OVERWRITE
+
+typedef struct
+{
+	uint8_t *base;
+	uint32_t used;
+} lowpool_t;
+
+static bool lowpool_init( lowpool_t *p )
+{
+	static const uint64_t hints[] = { 0x80000000ULL, 0x40000000ULL, 0xc0000000ULL, 0x10000000ULL };
+	static const int flags[] = { 0, MAP_FIXED_NO_OVERWRITE };
+	const int prot = ORBIS_KERNEL_PROT_CPU_READ | ORBIS_KERNEL_PROT_CPU_RW | ORBIS_KERNEL_PROT_GPU_READ | ORBIS_KERNEL_PROT_GPU_WRITE;
+	off_t off = 0;
+	size_t f, h;
+	int res;
+
+	res = sceKernelAllocateDirectMemory( 0, sceKernelGetDirectMemorySize(), LOW_POOL_SIZE, LOW_POOL_SIZE, ORBIS_KERNEL_WC_GARLIC, &off );
+	if( res < 0 )
+	{
+		printf( "low pool: AllocateDirectMemory = 0x%x", res );
+		return false;
+	}
+
+	for( f = 0; f < sizeof( flags ) / sizeof( flags[0] ); f++ )
+	{
+		for( h = 0; h < sizeof( hints ) / sizeof( hints[0] ); h++ )
+		{
+			void *addr = (void *)(uintptr_t)hints[h];
+
+			res = sceKernelMapDirectMemory( &addr, LOW_POOL_SIZE, prot, flags[f], off, LOW_POOL_SIZE );
+			printf( "low pool: map hint 0x%llx flags 0x%x = 0x%x, got %p", (unsigned long long)hints[h], flags[f], res, addr );
+			if( res < 0 )
+				continue;
+
+			if( (uintptr_t)addr + LOW_POOL_SIZE <= 0x100000000ULL )
+			{
+				p->base = addr;
+				p->used = 0;
+				return true;
+			}
+
+			sceKernelMunmap( addr, LOW_POOL_SIZE );
+		}
+	}
+
+	return false;
+}
+
+static void *lowpool_alloc( lowpool_t *p, uint32_t size, uint32_t align )
+{
+	uint32_t start = ( p->used + align - 1 ) & ~( align - 1 );
+
+	if( start + size > LOW_POOL_SIZE )
+		return NULL;
+
+	p->used = start + size;
+	return p->base + start;
+}
+
 // stage B: shaders, render target, flip
 typedef struct
 {
@@ -280,11 +344,15 @@ typedef struct
 	void *cmdmem;
 	uint32_t cmdsize;
 	volatile uint64_t *label;
+	lowpool_t low; // descriptor tables, reused by every command buffer
 } scene_t;
 
 static GnmCommandBuffer begin_cmd( scene_t *s )
 {
 	GnmCommandBuffer cmd = gnmCmdInit( s->cmdmem, s->cmdsize, NULL, NULL );
+
+	// previous submit is finished by now, so its descriptor tables can be reused
+	s->low.used = 0;
 
 	if( !cfg( "nodefault" ))
 		gnmDrawCmdInitDefaultHardwareState( &cmd );
@@ -355,9 +423,9 @@ static void emit_clear( scene_t *s, GnmCommandBuffer *cmd, const float color[4] 
 	gnmDrawCmdSetPsInputUsage( cmd, gnmVsShaderExportSemanticTable( s->fullvs ), s->fullvs->numexportsemantics,
 		gnmPsShaderInputSemanticTable( s->clearps ), s->clearps->numinputsemantics );
 
-	// constant buffer with color and the table with its descriptor live inside the command buffer
+	// constant buffer with color lives inside the command buffer, the table with its descriptor below 4 GB
 	colorbuf = gnmCmdAllocInside( cmd, sizeof( float ) * 4, 4 );
-	table = gnmCmdAllocInside( cmd, sizeof( GnmBuffer ), 16 );
+	table = lowpool_alloc( &s->low, sizeof( GnmBuffer ), 16 );
 	for( i = 0; i < 4; i++ )
 		colorbuf[i] = color[i];
 	*table = gnmCreateConstBuffer( colorbuf, sizeof( float ) * 4 );
@@ -465,6 +533,13 @@ static bool stage_triangle( MemoryAllocator *garlic )
 		printf( "B: FAIL, VideoOut buffer registration" );
 		return false;
 	}
+
+	if( !lowpool_init( &s->low ))
+	{
+		printf( "B: FAIL, can't map memory for descriptor tables below 4 GB" );
+		return false;
+	}
+	printf( "B: descriptor tables at %p", s->low.base );
 
 	s->cmdsize = 1024 * 1024;
 	s->cmdmem = memalloc_alloc( garlic, s->cmdsize, GNM_ALIGNMENT_BUFFER_BYTES );
