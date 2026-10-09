@@ -93,7 +93,7 @@ def ps4_add_runtime(self):
 		if self.env.PS4_MALLOC_WRAP:
 			flags += [self.env.PS4_RT_MALLOC_MODULE]
 	else:
-		flags = [self.env.PS4_CRT_PROGRAM]
+		flags = [self.env.PS4_CRT_PROGRAM, '-lSceSystemService']
 		if self.env.PS4_MALLOC_WRAP:
 			# eboot.bin owns the process heap, modules find it at runtime
 			flags += [self.env.PS4_RT_MALLOC]

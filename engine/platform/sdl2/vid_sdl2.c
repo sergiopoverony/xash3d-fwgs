@@ -133,11 +133,40 @@ qboolean SW_CreateBuffer( int width, int height, uint *stride, uint *bpp, uint *
 			return false;
 		}
 
+#if XASH_PS4
+		// window covers the whole screen, engine renders into smaller surface that is scaled on present
+		if( sw.surf )
+		{
+			SDL_FreeSurface( sw.surf );
+			sw.surf = NULL;
+		}
+
+		if( sw.win->w != width || sw.win->h != height )
+		{
+			sw.surf = SDL_CreateRGBSurfaceWithFormat( 0, width, height, sw.win->format->BitsPerPixel, sw.win->format->format );
+
+			if( !sw.surf )
+				Sys_Error( "%s: %s", __func__, SDL_GetError( ));
+
+			SDL_FillRect( sw.win, NULL, 0 );
+		}
+
+		{
+			SDL_Surface *target = sw.surf ? sw.surf : sw.win;
+
+			*bpp = target->format->BytesPerPixel;
+			*r = target->format->Rmask;
+			*g = target->format->Gmask;
+			*b = target->format->Bmask;
+			*stride = target->pitch / target->format->BytesPerPixel;
+		}
+#else
 		*bpp = sw.win->format->BytesPerPixel;
 		*r = sw.win->format->Rmask;
 		*g = sw.win->format->Gmask;
 		*b = sw.win->format->Bmask;
 		*stride = sw.win->pitch / sw.win->format->BytesPerPixel;
+#endif
 
 		Con_Reportf( "%s: window surface %dx%d, %u bpp, stride %u\n", __func__, sw.win->w, sw.win->h, *bpp * 8, *stride );
 
@@ -223,7 +252,27 @@ void SW_UnlockBuffer( void )
 		};
 		SDL_Rect dst = src;
 		SDL_UnlockSurface( sw.surf );
+#if XASH_PS4
+		// scale to the screen keeping aspect ratio
+		if( sw.win->w * sw.height > sw.win->h * sw.width )
+		{
+			dst.h = sw.win->h;
+			dst.w = sw.width * sw.win->h / sw.height;
+		}
+		else
+		{
+			dst.w = sw.win->w;
+			dst.h = sw.height * sw.win->w / sw.width;
+		}
+
+		dst.x = ( sw.win->w - dst.w ) / 2;
+		dst.y = ( sw.win->h - dst.h ) / 2;
+
+		SDL_BlitScaled( sw.surf, &src, sw.win, &dst );
+		SDL_UpdateWindowSurface( host.hWnd );
+#else
 		SDL_BlitSurface( sw.surf, &src, sw.win, &dst );
+#endif
 		return;
 	}
 
@@ -671,6 +720,20 @@ static rserr_t VID_CreateWindow( const int input_width, const int input_height, 
 	SetBits( flags, SDL_WINDOW_ALLOW_HIGHDPI );
 #endif // !XASH_WIN32
 
+#if XASH_PS4
+	// window always covers the whole screen, frame is scaled on present, see SW_UnlockBuffer
+	{
+		SDL_DisplayMode mode;
+
+		if( !SDL_GetDesktopDisplayMode( 0, &mode ))
+		{
+			rect.x = rect.y = 0;
+			rect.w = mode.w;
+			rect.h = mode.h;
+		}
+	}
+#endif // XASH_PS4
+
 	if( !glw_state.software )
 		SetBits( flags, SDL_WINDOW_OPENGL );
 
@@ -744,8 +807,13 @@ static rserr_t VID_CreateWindow( const int input_width, const int input_height, 
 	}
 
 	// update window size if it was resized
+#if XASH_PS4
+	// render size isn't the window size, see above
+	VID_SaveWindowSize( input_width, input_height );
+#else
 	SDL_GetWindowSize( host.hWnd, &rect.w, &rect.h );
 	VID_SaveWindowSize( rect.w, rect.h );
+#endif
 
 	VID_Info_f();
 

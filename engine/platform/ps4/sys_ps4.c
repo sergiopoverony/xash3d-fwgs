@@ -27,6 +27,7 @@ GNU General Public License for more details.
 #include <signal.h>
 #include <orbis/libkernel.h>
 #include <orbis/UserService.h>
+#include <orbis/SystemService.h>
 #include "platform/ps4/dlfcn_ps4.h"
 #include <SDL.h>
 
@@ -729,6 +730,13 @@ int PS4_RunOnBigStack( int ( *func )( void *arg ), void *arg )
 	pthread_join( thread, NULL );
 	PS4_Log( "engine thread finished: %d\n", args.ret );
 
+	// returning from main runs libc and module teardown, which crashes with CE-34878
+	// ask the system to close the application instead
+	PS4_Log( "exiting\n" );
+	sceSystemServiceLoadExec( "exit", NULL );
+
+	// shouldn't get here
+	_exit( args.ret );
 	return args.ret;
 }
 
