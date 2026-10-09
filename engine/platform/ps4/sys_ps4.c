@@ -552,9 +552,19 @@ static void PS4_DumpContext( void *context )
 		}
 	}
 
-	// handler runs on the same stack below the interrupted frame, so walk up from here
-	// and print everything that looks like return address
+	// scan interrupted thread stack for return addresses
+	// rsp is ctx[31] on PS4, use it only if it's near our own stack
 	stack = (const uintptr_t *)( here & ~(uintptr_t)7 );
+	if( context )
+	{
+		uintptr_t rsp = ctx[31];
+
+		if( rsp > here - 64 * 1024 * 1024 && rsp < here + 64 * 1024 * 1024 && !( rsp & 7 ))
+		{
+			PS4_Log( "rsp 0x%016lx\n", (unsigned long)rsp );
+			stack = (const uintptr_t *)rsp;
+		}
+	}
 	for( int i = 0; i < 4096 && found < 40; i++ )
 	{
 		const char *name;

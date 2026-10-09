@@ -139,6 +139,8 @@ qboolean SW_CreateBuffer( int width, int height, uint *stride, uint *bpp, uint *
 		*b = sw.win->format->Bmask;
 		*stride = sw.win->pitch / sw.win->format->BytesPerPixel;
 
+		Con_Reportf( "%s: window surface %dx%d, %u bpp, stride %u\n", __func__, sw.win->w, sw.win->h, *bpp * 8, *stride );
+
 		/// TODO: check somehow if ref_soft can handle native format
 #if 0
 		{
@@ -677,6 +679,7 @@ static rserr_t VID_CreateWindow( const int input_width, const int input_height, 
 
 	// by default we create window in windowed mode because we don't know
 	// if window creation failed because of invalid video mode or any other reason
+	Con_Reportf( "%s: creating %dx%d window, flags 0x%x\n", __func__, rect.w, rect.h, flags );
 	host.hWnd = SDL_CreateWindow( GI->title, rect.x, rect.y, rect.w, rect.h, flags );
 
 	if( !host.hWnd )
@@ -697,6 +700,7 @@ static rserr_t VID_CreateWindow( const int input_width, const int input_height, 
 	VID_SetWindowIcon( host.hWnd );
 	SDL_ShowWindow( host.hWnd );
 	SDL_RaiseWindow( host.hWnd );
+	Con_Reportf( "%s: window is shown\n", __func__ );
 
 	if( glw_state.software )
 	{
