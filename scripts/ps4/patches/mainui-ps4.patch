@@ -1,3 +1,17 @@
+diff --git a/controls/AnimatedBanner.cpp b/controls/AnimatedBanner.cpp
+index bf16e4a..e335956 100644
+--- a/controls/AnimatedBanner.cpp
++++ b/controls/AnimatedBanner.cpp
+@@ -85,6 +85,9 @@ bool CMenuAnimatedBanner::TryLoad()
+ 
+ void CMenuAnimatedBanner::VidInit()
+ {
++	// decoration, must not take keyboard focus
++	SetBits( iFlags, QMF_INACTIVE );
++
+ 	// in hardware mode, it's scaled by screen width
+ 	// in software mode, scale must be 1.0f
+ 	scale = ScreenWidth / 1024.0f;
 diff --git a/controls/BaseWindow.cpp b/controls/BaseWindow.cpp
 index e18b790..5ca56ca 100644
 --- a/controls/BaseWindow.cpp
@@ -33,6 +47,33 @@ index e18b790..5ca56ca 100644
  		break;
  	}
  #endif
+diff --git a/controls/Framework.cpp b/controls/Framework.cpp
+index 12d2a29..300f1d3 100644
+--- a/controls/Framework.cpp
++++ b/controls/Framework.cpp
+@@ -221,6 +221,8 @@ bool CMenuFramework::DrawAnimation()
+ 
+ CMenuFramework::CMenuBannerBitmap::CMenuBannerBitmap()
+ {
++	// decoration, must not take keyboard focus
++	iFlags |= QMF_INACTIVE;
+ 	SetRect( UI_BANNER_POSX, UI_BANNER_POSY, UI_BANNER_WIDTH, UI_BANNER_HEIGHT );
+ }
+ 
+diff --git a/controls/MovieBanner.cpp b/controls/MovieBanner.cpp
+index 730c727..f40becb 100755
+--- a/controls/MovieBanner.cpp
++++ b/controls/MovieBanner.cpp
+@@ -26,6 +26,9 @@ const float splashHeight = 480.0f;
+ 
+ void CMenuMovieBanner::VidInit()
+ {
++	// decoration, must not take keyboard focus
++	SetBits( iFlags, QMF_INACTIVE );
++
+ 	EngFuncs::PrecacheLogo( "logo.avi" );
+ 
+ 	float xScale, yScale;
 diff --git a/menus/Configuration.cpp b/menus/Configuration.cpp
 index 6e0a981..c7a73f3 100644
 --- a/menus/Configuration.cpp
