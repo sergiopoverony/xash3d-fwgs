@@ -28,6 +28,7 @@ GNU General Public License for more details.
 #include <orbis/libkernel.h>
 #include <orbis/UserService.h>
 #include "platform/ps4/dlfcn_ps4.h"
+#include <SDL.h>
 
 // application package mount point
 #define PS4_APP_DIR      "/app0"
@@ -50,6 +51,8 @@ static char ps4_logpath[300];
 static volatile uint64_t ps4_last_log_time;
 
 static void PS4_InstallCrashHandler( void );
+static SDL_AssertState SDLCALL PS4_SDLAssertion( const SDL_AssertData *data, void *userdata );
+static void SDLCALL PS4_SDLLog( void *userdata, int category, SDL_LogPriority priority, const char *message );
 
 // platform/ps4/compat/ps4_cwd.c
 const char *PS4_GetStatLayout( void );
@@ -399,6 +402,10 @@ int PS4_GetArgv( int in_argc, char **in_argv, char ***out_argv )
 
 	PS4_InstallCrashHandler( );
 
+	// before SDL_Init, so nothing can block on stdin or get lost
+	SDL_SetAssertionHandler( PS4_SDLAssertion, NULL );
+	SDL_LogSetOutputFunction( PS4_SDLLog, NULL );
+
 	ps4_argv[argc++] = ( in_argc > 0 && in_argv[0] ) ? in_argv[0] : (char *)PS4_APP_DIR "/eboot.bin";
 
 	Q_snprintf( path, sizeof( path ), "%s/%s", ps4_basedir, PS4_CMDLINE_FILE );
@@ -715,6 +722,25 @@ int PS4_RunOnBigStack( int ( *func )( void *arg ), void *arg )
 	PS4_Log( "engine thread finished: %d\n", args.ret );
 
 	return args.ret;
+}
+
+/*
+==================
+PS4_SDLAssertion
+
+Default SDL handler asks user on stdin and blocks forever, log and continue instead
+==================
+*/
+static SDL_AssertState SDLCALL PS4_SDLAssertion( const SDL_AssertData *data, void *userdata )
+{
+	PS4_Log( "SDL assertion failed: '%s' at %s:%d (%s), %u times\n",
+		data->condition, data->filename, data->linenum, data->function, data->trigger_count );
+	return SDL_ASSERTION_ALWAYS_IGNORE;
+}
+
+static void SDLCALL PS4_SDLLog( void *userdata, int category, SDL_LogPriority priority, const char *message )
+{
+	PS4_Log( "SDL: %s\n", message );
 }
 
 void PS4_Init( void )
