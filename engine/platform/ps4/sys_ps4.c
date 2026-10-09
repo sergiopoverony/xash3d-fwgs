@@ -49,6 +49,7 @@ GNU General Public License for more details.
 static char ps4_basedir[256];
 static char *ps4_argv[PS4_MAX_ARGV];
 static char ps4_logpath[300];
+static qboolean ps4_watchdog_enabled;
 static volatile uint64_t ps4_last_log_time;
 
 static void PS4_InstallCrashHandler( void );
@@ -455,7 +456,12 @@ int PS4_GetArgv( int in_argc, char **in_argv, char ***out_argv )
 	ps4_argv[argc] = NULL;
 
 	for( int i = 0; i < argc; i++ )
+	{
 		PS4_Log( "argv[%d] = %s\n", i, ps4_argv[i] );
+
+		if( !Q_strcmp( ps4_argv[i], "-ps4watchdog" ))
+			ps4_watchdog_enabled = true;
+	}
 
 	*out_argv = ps4_argv;
 	return argc;
@@ -710,7 +716,8 @@ static void *PS4_ThreadEntry( void *arg )
 	ps4_engine_thread = pthread_self( );
 	ps4_engine_thread_valid = true;
 
-	if( pthread_create( &watchdog, NULL, PS4_WatchdogThread, NULL ) == 0 )
+	// diagnostic for hangs during startup, enabled with -ps4watchdog in xash3d.cmdline
+	if( ps4_watchdog_enabled && pthread_create( &watchdog, NULL, PS4_WatchdogThread, NULL ) == 0 )
 		pthread_detach( watchdog );
 
 	args->ret = args->func( args->arg );

@@ -28,6 +28,28 @@ until it's merged to their repositories.
 
 ## Status
 
+Half-Life runs: menu, gameplay, sound, DualShock 4, level changes, save/load, exit.
+
 * Software renderer only: Piglet (system GLES2) can't compile shaders at runtime.
+  Frame is rendered at configured resolution (1280x720 by default) and scaled to the screen.
 * DualShock 4 is read through libScePad directly.
 * Savegames store function offsets instead of names (no `dladdr`).
+
+## Implementation notes
+
+OpenOrbis toolchain needed several workarounds, all in `engine/platform/ps4/compat`
+and linked into every image by `scripts/waifulib/ps4.py`:
+
+* `ps4_crtlib.c` replaces toolchain `crtlib.o`, which never runs global constructors of modules.
+* `ps4_malloc.c` replaces per-image musl heaps with one locked heap owned by `eboot.bin`,
+  modules find it by a signature in its data segment.
+* `ps4_cwd.c` emulates working directory (PS4 apps can't `chdir`, relative paths are rejected)
+  and converts FreeBSD 9 `struct stat` returned by the kernel.
+* Images must be linked with `ld.lld` of the same version as clang (18), newer lld picks
+  musl's `lite_malloc`.
+
+## Debugging
+
+* `stdout.txt` survives crashes. Crashes print registers and stack as `module+offset`,
+  resolve them with `scripts/ps4/symbolize.sh <console IP> [hlsdk build dir]`.
+* `-ps4watchdog` in `xash3d.cmdline` dumps engine thread state if nothing is logged for 10 seconds.
