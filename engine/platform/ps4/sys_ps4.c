@@ -495,9 +495,12 @@ llvm-addr2line on unstripped ELF from build directory
 
 // PS4 kernel uses FreeBSD numbering and layouts, OpenOrbis headers partially don't
 #define PS4_SIGILL     4
+#define PS4_SIGTRAP    5
+#define PS4_SIGABRT    6
 #define PS4_SIGFPE     8
 #define PS4_SIGBUS     10
 #define PS4_SIGSEGV    11
+#define PS4_SIGSYS     12
 #define PS4_SA_SIGINFO 0x40
 
 #define PS4_MAX_MODULES 128
@@ -689,7 +692,7 @@ static void *PS4_WatchdogThread( void *arg )
 
 static void PS4_InstallCrashHandler( void )
 {
-	const int signals[] = { PS4_SIGILL, PS4_SIGFPE, PS4_SIGBUS, PS4_SIGSEGV };
+	const int signals[] = { PS4_SIGILL, PS4_SIGTRAP, PS4_SIGABRT, PS4_SIGFPE, PS4_SIGBUS, PS4_SIGSEGV, PS4_SIGSYS };
 	struct sigaction sa;
 
 	memset( &sa, 0, sizeof( sa ));
