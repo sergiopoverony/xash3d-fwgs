@@ -378,13 +378,28 @@ static void PS4_SetupDataDir( void )
 
 	// libraries (SDL port in particular) print to stdout directly, which crashes
 	// without valid descriptor behind it, so send it to the same log, unbuffered
-	if( freopen( ps4_logpath, "a", stdout ))
-		setvbuf( stdout, NULL, _IONBF, 0 );
-	else
-		PS4_Log( "can't redirect stdout: %s\n", strerror( errno ));
+	// freopen isn't used here: when it fails, musl closes the original stream
+	// and the next printf crashes on null buffer pointers
+	{
+		int fd = open( ps4_logpath, O_WRONLY | O_CREAT | O_APPEND, 0666 );
 
-	if( freopen( ps4_logpath, "a", stderr ))
+		if( fd >= 0 )
+		{
+			if( fd != STDOUT_FILENO && dup2( fd, STDOUT_FILENO ) < 0 )
+				PS4_Log( "can't redirect stdout: %s\n", strerror( errno ));
+
+			if( fd != STDERR_FILENO && dup2( fd, STDERR_FILENO ) < 0 )
+				PS4_Log( "can't redirect stderr: %s\n", strerror( errno ));
+
+			if( fd > STDERR_FILENO )
+				close( fd );
+		}
+		else PS4_Log( "can't open %s: %s\n", ps4_logpath, strerror( errno ));
+
+		// even if redirection failed, unbuffered stream just drops the output
+		setvbuf( stdout, NULL, _IONBF, 0 );
 		setvbuf( stderr, NULL, _IONBF, 0 );
+	}
 
 	// emulated by platform/ps4/compat/ps4_cwd.c, so relative paths work in engine image too
 	if( chdir( ps4_basedir ) < 0 )
