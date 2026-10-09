@@ -139,6 +139,7 @@ int PS4_RunOnBigStack( int ( *func )( void *arg ), void *arg );
 void PS4_Log( const char *fmt, ... ) FORMAT_CHECK( 1 );
 void PS4_InputUpdate( void );
 void PS4_FramePresented( void );
+void PS4_AllowHideSplash( void );
 #endif
 
 #if XASH_DOS
