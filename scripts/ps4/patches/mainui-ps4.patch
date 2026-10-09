@@ -33,3 +33,38 @@ index 331f7db..dd522a3 100644
  	AddItem( joystick );
  #ifdef __ANDROID__
  	AddItem( evdev );
+diff --git a/menus/ServerBrowser.cpp b/menus/ServerBrowser.cpp
+index 8dc57df..f2b23e7 100644
+--- a/menus/ServerBrowser.cpp
++++ b/menus/ServerBrowser.cpp
+@@ -584,6 +584,9 @@ void CMenuGameListModel::Update( void )
+ 
+ void CMenuGameListModel::OnActivateEntry( int line )
+ {
++	if( !servers.IsValidIndex( line ))
++		return;
++
+ 	CMenuServerBrowser::Connect( servers[line] );
+ }
+ 
+@@ -770,7 +773,19 @@ CMenuServerBrowser::JoinGame
+ */
+ void CMenuServerBrowser::JoinGame()
+ {
+-	gameListModel.OnActivateEntry( gameList.GetCurrentIndex() );
++	int i = gameList.GetCurrentIndex();
++
++	// with gamepad, Join button can be pressed without selecting a server first
++	// or list could be refreshed in the meantime
++	if( !gameListModel.servers.IsValidIndex( i ))
++	{
++		if( gameListModel.servers.Count() != 1 )
++			return;
++
++		i = 0;
++	}
++
++	gameListModel.OnActivateEntry( i );
+ }
+ 
+ void CMenuServerBrowser::FavoriteServer()
