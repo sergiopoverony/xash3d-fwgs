@@ -592,8 +592,18 @@ void Key_SetDefaultGamepadBindings( void )
 			continue;
 
 		binding = Key_GetBinding( keynames[i].keynum );
-		if( !binding || !binding[0] )
-			Key_SetBinding( keynames[i].keynum, keynames[i].binding );
+		if( binding && binding[0] )
+			continue;
+
+		binding = keynames[i].binding;
+#if XASH_PS4
+		// PlayStation games traditionally fire with R2
+		if( keynames[i].keynum == K_R1_BUTTON )
+			binding = "+attack2";
+		else if( keynames[i].keynum == K_RTRIGGER || keynames[i].keynum == K_R2_BUTTON )
+			binding = "+attack";
+#endif
+		Key_SetBinding( keynames[i].keynum, binding );
 	}
 }
 
