@@ -544,18 +544,26 @@ static void PS4_DumpContext( void *context )
 	PS4_Log( "thread %p%s\n", (void *)pthread_self( ),
 		ps4_engine_thread_valid && pthread_equal( pthread_self( ), ps4_engine_thread ) ? " (engine)" : "" );
 
-	// ucontext layout isn't documented, so print raw words, marking ones that point into modules
+	// PS4 ucontext: FreeBSD amd64 mcontext starts at word 8
 	if( context )
 	{
-		for( int i = 0; i < 48; i++ )
+		static const char *names[] =
 		{
+			"rdi", "rsi", "rdx", "rcx", "r8", "r9", "rax", "rbx", "rbp",
+			"r10", "r11", "r12", "r13", "r14", "r15", "trapno", "addr", "flags", "err",
+			"rip", "cs", "rflags", "rsp",
+		};
+
+		for( int i = 0; i < (int)ARRAYSIZE( names ); i++ )
+		{
+			uintptr_t v = ctx[9 + i];
 			const char *name;
 			uintptr_t offset;
 
-			if( PS4_AddrToModule( ctx[i], &name, &offset ))
-				PS4_Log( "ctx[%2d] 0x%016lx %s+0x%lx\n", i, (unsigned long)ctx[i], name, (unsigned long)offset );
+			if( PS4_AddrToModule( v, &name, &offset ))
+				PS4_Log( "%-6s 0x%016lx %s+0x%lx\n", names[i], (unsigned long)v, name, (unsigned long)offset );
 			else
-				PS4_Log( "ctx[%2d] 0x%016lx\n", i, (unsigned long)ctx[i] );
+				PS4_Log( "%-6s 0x%016lx\n", names[i], (unsigned long)v );
 		}
 	}
 
@@ -564,7 +572,7 @@ static void PS4_DumpContext( void *context )
 	stack = (const uintptr_t *)( here & ~(uintptr_t)7 );
 	if( context )
 	{
-		uintptr_t rsp = ctx[31];
+		uintptr_t rsp = ctx[31]; // see register names above
 
 		if( rsp > here - 64 * 1024 * 1024 && rsp < here + 64 * 1024 * 1024 && !( rsp & 7 ))
 		{

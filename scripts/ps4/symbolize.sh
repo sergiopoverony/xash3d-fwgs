@@ -36,12 +36,12 @@ find_elf()
 
 EXTRA_DIRS="$*"
 
-grep -oE '[A-Za-z0-9_.-]+\.(bin|prx|sprx)\+0x[0-9a-f]+' "$INPUT" | while read -r entry; do
+grep -oE "[A-Za-z0-9_.-]+\.(bin|prx|sprx)\+0x[0-9a-f]+" "$INPUT" | awk "!seen[\$0]++" | while read -r entry; do
 	module=${entry%%+*}
 	offset=${entry#*+}
 	elf=$(find_elf "$module")
 	if [ -n "$elf" ] && [ -f "$elf" ]; then
-		printf '%-40s %s\n' "$entry" "$("$ADDR2LINE" -f -C -i -e "$elf" "$offset" | paste -sd ' ' -)"
+		printf '%-40s %s\n' "$entry" "$("$ADDR2LINE" -f -C -i -e "$elf" "$offset" < /dev/null | paste -sd ' ' -)"
 	else
 		printf '%-40s (system module)\n' "$entry"
 	fi
