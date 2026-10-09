@@ -1,3 +1,38 @@
+diff --git a/controls/BaseWindow.cpp b/controls/BaseWindow.cpp
+index e18b790..5ca56ca 100644
+--- a/controls/BaseWindow.cpp
++++ b/controls/BaseWindow.cpp
+@@ -39,22 +39,27 @@ void CMenuBaseWindow::Show()
+ 	// Probably not a best way
+ 	// but we need to inform new window about cursor position,
+ 	// otherwise we will have an invalid cursor until first mouse move event
+-#if 1
++#if !defined( __ORBIS__ )
+ 	m_iCursorPrev = -1;
+ 	MouseMove( uiStatic.cursorX, uiStatic.cursorY );
+-#else
++#else // PS4 has no mouse, focus first item so gamepad selection is visible
+ 	m_iCursor = 0;
+ 	m_iCursorPrev = 0;
++
++	FOR_EACH_VEC( m_pItems, i )
++		ClearBits( m_pItems[i]->iFlags, QMF_HASKEYBOARDFOCUS|QMF_HASMOUSEFOCUS );
++
+ 	// force first available item to have focus
+ 	FOR_EACH_VEC( m_pItems, i )
+ 	{
+-		item = m_pItems[i];
++		CMenuBaseItem *item = m_pItems[i];
+ 
+ 		if( !item->IsVisible() || item->iFlags & (QMF_GRAYED|QMF_INACTIVE|QMF_MOUSEONLY))
+ 			continue;
+ 
+ 		m_iCursorPrev = -1;
+ 		SetCursor( i );
++		SetBits( item->iFlags, QMF_HASKEYBOARDFOCUS );
+ 		break;
+ 	}
+ #endif
 diff --git a/menus/Configuration.cpp b/menus/Configuration.cpp
 index 6e0a981..c7a73f3 100644
 --- a/menus/Configuration.cpp
