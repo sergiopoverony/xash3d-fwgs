@@ -48,7 +48,7 @@ index e18b790..5ca56ca 100644
  	}
  #endif
 diff --git a/controls/DropDown.cpp b/controls/DropDown.cpp
-index df9a835..77e1338 100644
+index df9a835..bd89748 100644
 --- a/controls/DropDown.cpp
 +++ b/controls/DropDown.cpp
 @@ -103,6 +103,14 @@ bool CMenuDropDown::KeyUp( int key )
@@ -66,20 +66,21 @@ index df9a835..77e1338 100644
  		if( UI::Key::IsDownArrow( key ) )
  			state += 1;
  		else if( UI::Key::IsUpArrow( key ) )
-@@ -160,6 +168,12 @@ void CMenuDropDown::Draw()
+@@ -160,6 +168,13 @@ void CMenuDropDown::Draw()
  	if( iFlags & QMF_DROPSHADOW )
  		textflags |= ETF_SHADOW;
  
 +#if defined( __ORBIS__ )
-+	// no mouse hover, show which item has gamepad focus
++	// no mouse hover, show which item has gamepad focus,
++	// same color as focused table stroke
 +	if( FBitSet( iFlags, QMF_HASKEYBOARDFOCUS|QMF_HASMOUSEFOCUS ))
-+		borderColor = colorFocus;
++		borderColor = uiInputTextColor;
 +#endif
 +
  	if( m_isOpen )
  	{
  		Point pt( m_scPos.x, m_scPos.y );
-@@ -174,7 +188,12 @@ void CMenuDropDown::Draw()
+@@ -174,7 +189,12 @@ void CMenuDropDown::Draw()
  			uint textColor = iBgTextColor;
  			uint tempflags = textflags;
  
