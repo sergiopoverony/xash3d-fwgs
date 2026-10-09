@@ -20,8 +20,7 @@ so it never takes locks, and concurrent allocations corrupt the heap.
 
 The linker redirects malloc family here with --wrap (see scripts/waifulib/ps4.py).
 
-In eboot.bin calls are serialized with a recursive lock (musl's memalign and
-friends call malloc and free internally) and exported as __ps4_heap_*.
+In eboot.bin calls are serialized with a lock and exported as __ps4_heap_*.
 
 Modules (built with PS4_MODULE) look these exports up and use the same heap,
 so memory can be freed by any image. If lookup fails, module falls back to
@@ -30,8 +29,6 @@ its own locked heap.
 
 #include <stddef.h>
 #include <stdint.h>
-#include <pthread.h>
-#include <sched.h>
 
 void *__real_malloc( size_t size );
 void __real_free( void *ptr );
@@ -41,41 +38,21 @@ void *__real_memalign( size_t align, size_t size );
 int __real_posix_memalign( void **ptr, size_t align, size_t size );
 size_t __real_malloc_usable_size( void *ptr );
 
+// plain spinlock, no libkernel imports: this runs before anything else is set up
+// memalign and friends aren't locked as a whole, they call wrapped malloc and free
 static volatile int ps4_heap_lock;
-static volatile uintptr_t ps4_heap_owner;
-static int ps4_heap_depth; // only touched by the owner
 
-static inline uintptr_t PS4_ThreadId( void )
+static inline void PS4_HeapLock( void )
 {
-	return (uintptr_t)pthread_self( );
-}
-
-static void PS4_HeapLock( void )
-{
-	uintptr_t self = PS4_ThreadId( );
-
-	if( ps4_heap_owner == self )
-	{
-		ps4_heap_depth++;
-		return;
-	}
-
 	while( __atomic_exchange_n( &ps4_heap_lock, 1, __ATOMIC_ACQUIRE ))
 	{
 		while( __atomic_load_n( &ps4_heap_lock, __ATOMIC_RELAXED ))
-			sched_yield( );
+			__builtin_ia32_pause( );
 	}
-
-	ps4_heap_owner = self;
-	ps4_heap_depth = 1;
 }
 
-static void PS4_HeapUnlock( void )
+static inline void PS4_HeapUnlock( void )
 {
-	if( --ps4_heap_depth > 0 )
-		return;
-
-	ps4_heap_owner = 0;
 	__atomic_store_n( &ps4_heap_lock, 0, __ATOMIC_RELEASE );
 }
 
@@ -94,9 +71,9 @@ HEAP_FUNC void *__ps4_heap_malloc( size_t size ) { LOCKED( void *, __real_malloc
 HEAP_FUNC void __ps4_heap_free( void *ptr ) { if( !ptr ) return; PS4_HeapLock( ); __real_free( ptr ); PS4_HeapUnlock( ); }
 HEAP_FUNC void *__ps4_heap_calloc( size_t num, size_t size ) { LOCKED( void *, __real_calloc( num, size )); }
 HEAP_FUNC void *__ps4_heap_realloc( void *ptr, size_t size ) { LOCKED( void *, __real_realloc( ptr, size )); }
-HEAP_FUNC void *__ps4_heap_memalign( size_t align, size_t size ) { LOCKED( void *, __real_memalign( align, size )); }
-HEAP_FUNC int __ps4_heap_posix_memalign( void **ptr, size_t align, size_t size ) { LOCKED( int, __real_posix_memalign( ptr, align, size )); }
-HEAP_FUNC size_t __ps4_heap_malloc_usable_size( void *ptr ) { LOCKED( size_t, __real_malloc_usable_size( ptr )); }
+HEAP_FUNC void *__ps4_heap_memalign( size_t align, size_t size ) { return __real_memalign( align, size ); }
+HEAP_FUNC int __ps4_heap_posix_memalign( void **ptr, size_t align, size_t size ) { return __real_posix_memalign( ptr, align, size ); }
+HEAP_FUNC size_t __ps4_heap_malloc_usable_size( void *ptr ) { return __real_malloc_usable_size( ptr ); }
 
 static struct
 {
@@ -161,8 +138,14 @@ static int PS4_FindEbootHeap( void )
 }
 #endif
 
+// engine logger, only present in eboot.bin
+extern void PS4_Log( const char *fmt, ... ) __attribute__(( weak ));
+
 static void PS4_InitHeap( void )
 {
+	if( PS4_Log )
+		PS4_Log( "heap: init\n" );
+
 #if PS4_MODULE
 	if( PS4_FindEbootHeap( ))
 	{

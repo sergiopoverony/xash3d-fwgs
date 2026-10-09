@@ -71,7 +71,11 @@ def configure(conf):
 
 		conf.env['PS4_RT_' + key.upper()] = obj.abspath()
 
-	conf.env.PS4_WRAP_FLAGS = ['-Wl,--wrap=%s' % i for i in PS4_WRAPPED_FUNCS]
+	# diagnostic switch: PS4_NO_MALLOC_WRAP=1 keeps original per-image musl malloc
+	conf.env.PS4_MALLOC_WRAP = not os.environ.get('PS4_NO_MALLOC_WRAP')
+	funcs = PS4_WRAPPED_FUNCS if conf.env.PS4_MALLOC_WRAP else PS4_WRAPPED_FUNCS[:PS4_WRAPPED_FUNCS.index('malloc')]
+	conf.msg('PS4 shared locked heap', conf.env.PS4_MALLOC_WRAP)
+	conf.env.PS4_WRAP_FLAGS = ['-Wl,--wrap=%s' % i for i in funcs]
 
 @TaskGen.feature('cprogram', 'cxxprogram', 'cshlib', 'cxxshlib')
 @TaskGen.after_method('propagate_uselib_vars')
@@ -85,10 +89,14 @@ def ps4_add_runtime(self):
 	is_cxx = 'cxx' in self.features or 'cxxprogram' in self.features or 'cxxshlib' in self.features
 
 	if is_library:
-		flags = [self.env.PS4_RT_CRTLIB, self.env.PS4_RT_MALLOC_MODULE]
+		flags = [self.env.PS4_RT_CRTLIB]
+		if self.env.PS4_MALLOC_WRAP:
+			flags += [self.env.PS4_RT_MALLOC_MODULE]
 	else:
-		# modules find shared heap functions in eboot.bin by name
-		flags = [self.env.PS4_CRT_PROGRAM, self.env.PS4_RT_MALLOC, '-Wl,--export-dynamic-symbol=__ps4_heap_*']
+		flags = [self.env.PS4_CRT_PROGRAM]
+		if self.env.PS4_MALLOC_WRAP:
+			# modules find shared heap functions in eboot.bin by name
+			flags += [self.env.PS4_RT_MALLOC, '-Wl,--export-dynamic-symbol=__ps4_heap_*']
 	flags += [self.env.PS4_RT_CWD]
 	flags += self.env.PS4_WRAP_FLAGS
 	if is_cxx:

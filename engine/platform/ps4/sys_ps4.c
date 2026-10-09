@@ -463,6 +463,9 @@ llvm-addr2line on unstripped ELF from build directory
 
 #define PS4_MAX_MODULES 128
 
+static pthread_t ps4_engine_thread;
+static volatile qboolean ps4_engine_thread_valid;
+
 static OrbisKernelModuleInfo ps4_modules[PS4_MAX_MODULES];
 static size_t ps4_num_modules;
 
@@ -531,8 +534,10 @@ static void PS4_DumpContext( void *context )
 
 	PS4_CollectModules( );
 
-	// ucontext layout isn't documented, so print every word that points into module code
-	// with its index, instruction pointer is one of the first ones
+	PS4_Log( "thread %p%s\n", (void *)pthread_self( ),
+		ps4_engine_thread_valid && pthread_equal( pthread_self( ), ps4_engine_thread ) ? " (engine)" : "" );
+
+	// ucontext layout isn't documented, so print raw words, marking ones that point into modules
 	if( context )
 	{
 		for( int i = 0; i < 48; i++ )
@@ -542,6 +547,8 @@ static void PS4_DumpContext( void *context )
 
 			if( PS4_AddrToModule( ctx[i], &name, &offset ))
 				PS4_Log( "ctx[%2d] 0x%016lx %s+0x%lx\n", i, (unsigned long)ctx[i], name, (unsigned long)offset );
+			else
+				PS4_Log( "ctx[%2d] 0x%016lx\n", i, (unsigned long)ctx[i] );
 		}
 	}
 
@@ -595,8 +602,6 @@ If engine prints nothing for a while, it's probably stuck: log where
 #define PS4_SIGUSR1         30
 #define PS4_WATCHDOG_USEC   ( 10 * 1000 * 1000 )
 
-static pthread_t ps4_engine_thread;
-static volatile qboolean ps4_engine_thread_valid;
 
 static void PS4_WatchdogSignal( int sig, siginfo_t *si, void *context )
 {
