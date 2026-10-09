@@ -37,9 +37,13 @@ def configure(conf):
 		conf.env['LINKFLAGS_' + i] = ['-Wl,-pie']
 
 	# compile working directory emulation once, it's linked into every image
-	src = conf.path.find_node('engine/platform/ps4/compat/ps4_cwd.c')
-	if not src:
-		conf.fatal('engine/platform/ps4/compat/ps4_cwd.c not found')
+	# engine and hlsdk-portable keep it in different places
+	for i in ['engine/platform/ps4/compat/ps4_cwd.c', 'scripts/ps4/ps4_cwd.c']:
+		src = conf.path.find_node(i)
+		if src:
+			break
+	else:
+		conf.fatal('ps4_cwd.c not found')
 
 	obj = conf.bldnode.make_node('ps4_cwd.o')
 	conf.start_msg('Compiling PS4 working directory emulation')
