@@ -104,3 +104,19 @@ def ps4_add_runtime(self):
 	flags += ['-lc'] + PS4_SYSTEM_LIBS
 
 	self.env.append_value('LDFLAGS', flags)
+
+@TaskGen.feature('cprogram', 'cxxprogram', 'cshlib', 'cxxshlib')
+@TaskGen.after_method('apply_link')
+def ps4_runtime_deps(self):
+	# runtime objects are passed through LDFLAGS, so waf doesn't know
+	# images have to be relinked when they change
+	if self.env.DEST_OS != 'ps4' or not getattr(self, 'link_task', None):
+		return
+
+	for key in ['PS4_RT_CWD', 'PS4_RT_CRTLIB', 'PS4_RT_MALLOC', 'PS4_RT_MALLOC_MODULE']:
+		path = self.env[key]
+		if path:
+			node = self.bld.root.find_node(path)
+			if node:
+				self.link_task.dep_nodes.append(node)
+
