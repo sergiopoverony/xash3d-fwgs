@@ -555,6 +555,45 @@ qboolean Cmd_GetKeysList( const char *s, char *completedname, int length, qboole
 */
 /*
 ===================
+Key_SetDefaultGamepadBindings
+
+Configs from desktop versions of the game start with "unbindall"
+and have no gamepad bindings, which makes the game unplayable
+on consoles. If no gamepad key is bound, restore default bindings for them.
+===================
+*/
+static qboolean Key_IsGamepadKey( int keynum )
+{
+	return ( keynum >= K_JOY1 && keynum <= K_JOY4 ) || ( keynum >= K_AUX1 && keynum <= K_AUX32 );
+}
+
+void Key_SetDefaultGamepadBindings( void )
+{
+	int i;
+
+	for( i = 0; i < ARRAYSIZE( keynames ); i++ )
+	{
+		const char *binding;
+
+		if( !Key_IsGamepadKey( keynames[i].keynum ))
+			continue;
+
+		binding = Key_GetBinding( keynames[i].keynum );
+		if( binding && binding[0] )
+			return; // user has own layout
+	}
+
+	Con_Reportf( "%s: no gamepad keys are bound, restoring defaults\n", __func__ );
+
+	for( i = 0; i < ARRAYSIZE( keynames ); i++ )
+	{
+		if( Key_IsGamepadKey( keynames[i].keynum ))
+			Key_SetBinding( keynames[i].keynum, keynames[i].binding );
+	}
+}
+
+/*
+===================
 Key_Init
 ===================
 */

@@ -1248,6 +1248,7 @@ void Key_Init( void );
 void Key_WriteBindings( file_t *f );
 const char *Key_GetBinding( int keynum );
 void Key_SetBinding( int keynum, const char *binding );
+void Key_SetDefaultGamepadBindings( void );
 const char *Key_LookupBinding( const char *pBinding );
 void Key_ClearStates( void );
 const char *Key_KeynumToString( int keynum );
