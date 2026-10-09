@@ -624,9 +624,13 @@ class PS4:
 		cflags += ['-isystem', os.path.join(self.toolchain, 'include')]
 		return cflags
 
+	def lld(self):
+		# clang driver takes ld.lld from PATH, which might be newer version with different --wrap behaviour
+		return self.find_clang('ld.lld')
+
 	# they go before object list
 	def linkflags(self):
-		linkflags = ['--target=%s' % self.target, '--sysroot=%s' % self.toolchain, '-fuse-ld=lld', '-nostdlib']
+		linkflags = ['--target=%s' % self.target, '--sysroot=%s' % self.toolchain, '-fuse-ld=%s' % self.lld(), '-nostdlib']
 		# OpenOrbis images are PIE, use toolchain linker script and no ELF interpreter
 		linkflags += ['-Wl,--no-dynamic-linker', '-Wl,-m,elf_x86_64', '-Wl,--eh-frame-hdr']
 		linkflags += ['-Wl,--script,%s' % os.path.join(self.toolchain, 'link.x')]
