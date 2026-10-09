@@ -1,13 +1,10 @@
-// From freegnm-examples triangle sample (MIT), https://github.com/PS4-OpenGNM/freegnm-examples
+// Constant color clear. Shaders that read resources fault on the GPU for now:
+// opengnm-psbc compiles with an empty pipeline layout, so descriptor loads
+// become loads through a null descriptor (address 0).
 #version 450
-#extension GL_ARB_separate_shader_objects : enable
 
 layout(location = 0) out vec4 outcol;
 
-layout(binding = 0) uniform Constants {
-    vec4 color;
-} c;
-
 void main() {
-	outcol = c.color;
+	outcol = vec4(0.1, 0.2, 0.4, 1.0);
 }

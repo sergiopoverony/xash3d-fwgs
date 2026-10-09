@@ -431,7 +431,9 @@ static void emit_clear( scene_t *s, GnmCommandBuffer *cmd, const float color[4],
 	gnmDrawCmdSetPsInputUsage( cmd, gnmVsShaderExportSemanticTable( s->fullvs ), s->fullvs->numexportsemantics,
 		gnmPsShaderInputSemanticTable( s->clearps ), s->clearps->numinputsemantics );
 
-	if( parts & CLEAR_TABLE )
+	// clear shader doesn't read resources for now (see shaders/clear.frag.glsl),
+	// then only the allocation inside the command buffer is checked
+	if(( parts & CLEAR_TABLE ) && s->clearreg >= 0 )
 	{
 		// table with the descriptor is below 4 GB, color data inside the command buffer or in the same pool
 		float *colorbuf = ( parts & CLEAR_ALLOC ) ? gnmCmdAllocInside( cmd, sizeof( float ) * 4, 4 ) : lowpool_alloc( &s->low, sizeof( float ) * 4, 16 );
@@ -525,11 +527,6 @@ static bool stage_triangle( MemoryAllocator *garlic )
 	s->clearreg = find_table_register( gnmPsShaderInputUsageSlotTable( s->clearps ), s->clearps->common.numinputusageslots );
 	printf( "B: shaders loaded, vs exports %u, ps inputs %u, clear resource table in user SGPR %d",
 		s->vs->numexportsemantics, s->ps->numinputsemantics, s->clearreg );
-	if( s->clearreg < 0 )
-	{
-		printf( "B: FAIL, clear shader has no resource table slot" );
-		return false;
-	}
 
 	if( !displayctx_init( &s->display ))
 	{
