@@ -38,21 +38,48 @@ void *__real_memalign( size_t align, size_t size );
 int __real_posix_memalign( void **ptr, size_t align, size_t size );
 size_t __real_malloc_usable_size( void *ptr );
 
-// plain spinlock, no libkernel imports: this runs before anything else is set up
-// memalign and friends aren't locked as a whole, they call wrapped malloc and free
+// recursive spinlock without libkernel imports, this runs before anything else is set up
+// recursion is needed: musl's calloc, realloc and memalign call malloc and free,
+// and those calls go through wrappers as well
 static volatile int ps4_heap_lock;
+static volatile uintptr_t ps4_heap_owner;
+static int ps4_heap_depth; // only touched by the owner
+
+static inline uintptr_t PS4_ThreadId( void )
+{
+	uintptr_t self;
+
+	// thread control block pointer, unique for each thread
+	__asm__ volatile( "movq %%fs:0, %0" : "=r"( self ));
+	return self;
+}
 
 static inline void PS4_HeapLock( void )
 {
+	uintptr_t self = PS4_ThreadId( );
+
+	if( __atomic_load_n( &ps4_heap_owner, __ATOMIC_RELAXED ) == self )
+	{
+		ps4_heap_depth++;
+		return;
+	}
+
 	while( __atomic_exchange_n( &ps4_heap_lock, 1, __ATOMIC_ACQUIRE ))
 	{
 		while( __atomic_load_n( &ps4_heap_lock, __ATOMIC_RELAXED ))
 			__builtin_ia32_pause( );
 	}
+
+	__atomic_store_n( &ps4_heap_owner, self, __ATOMIC_RELAXED );
+	ps4_heap_depth = 1;
 }
 
 static inline void PS4_HeapUnlock( void )
 {
+	if( --ps4_heap_depth > 0 )
+		return;
+
+	__atomic_store_n( &ps4_heap_owner, 0, __ATOMIC_RELAXED );
 	__atomic_store_n( &ps4_heap_lock, 0, __ATOMIC_RELEASE );
 }
 
@@ -71,9 +98,9 @@ HEAP_FUNC void *__ps4_heap_malloc( size_t size ) { LOCKED( void *, __real_malloc
 HEAP_FUNC void __ps4_heap_free( void *ptr ) { if( !ptr ) return; PS4_HeapLock( ); __real_free( ptr ); PS4_HeapUnlock( ); }
 HEAP_FUNC void *__ps4_heap_calloc( size_t num, size_t size ) { LOCKED( void *, __real_calloc( num, size )); }
 HEAP_FUNC void *__ps4_heap_realloc( void *ptr, size_t size ) { LOCKED( void *, __real_realloc( ptr, size )); }
-HEAP_FUNC void *__ps4_heap_memalign( size_t align, size_t size ) { return __real_memalign( align, size ); }
-HEAP_FUNC int __ps4_heap_posix_memalign( void **ptr, size_t align, size_t size ) { return __real_posix_memalign( ptr, align, size ); }
-HEAP_FUNC size_t __ps4_heap_malloc_usable_size( void *ptr ) { return __real_malloc_usable_size( ptr ); }
+HEAP_FUNC void *__ps4_heap_memalign( size_t align, size_t size ) { LOCKED( void *, __real_memalign( align, size )); }
+HEAP_FUNC int __ps4_heap_posix_memalign( void **ptr, size_t align, size_t size ) { LOCKED( int, __real_posix_memalign( ptr, align, size )); }
+HEAP_FUNC size_t __ps4_heap_malloc_usable_size( void *ptr ) { LOCKED( size_t, __real_malloc_usable_size( ptr )); }
 
 static struct
 {
