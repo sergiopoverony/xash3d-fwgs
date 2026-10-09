@@ -1017,6 +1017,12 @@ qboolean VID_SetMode( void )
 		Cvar_DirectSet( &vid_fullscreen, DEFAULT_FULLSCREEN );
 		Con_Reportf( S_ERROR "%s: windowed unavailable on this platform\n", __func__ );
 	}
+#elif XASH_PS4
+	if( Q_strcmp( vid_fullscreen.string, DEFAULT_FULLSCREEN ))
+	{
+		Cvar_DirectSet( &vid_fullscreen, DEFAULT_FULLSCREEN );
+		Con_Reportf( S_ERROR "%s: fullscreen modes are unavailable on this platform\n", __func__ );
+	}
 #endif
 
 	window_mode_t window_mode = bound( 0, vid_fullscreen.value, WINDOW_MODE_COUNT - 1 );

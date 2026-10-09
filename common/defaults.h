@@ -155,6 +155,7 @@ Default build-depended cvar and constant values
 	#define DEFAULT_MODE_HEIGHT  544
 	#define DEFAULT_ALLOWCONSOLE 1
 #elif XASH_PS4
+	#define DEFAULT_FULLSCREEN   "0" // SDL fullscreen switch hangs, window covers the screen anyway
 	#define DEFAULT_M_IGNORE     "1"
 	#define DEFAULT_MODE_WIDTH   1280
 	#define DEFAULT_MODE_HEIGHT  720
