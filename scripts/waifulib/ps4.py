@@ -31,8 +31,8 @@ PS4_WRAPPED_FUNCS = ['open', 'fopen', 'stat', 'lstat', 'fstat', 'opendir', 'mkdi
 	'malloc_usable_size',
 	# standard output is made thread safe, see ps4_stdio.c
 	'printf', 'vprintf', 'fprintf', 'vfprintf', 'puts', 'fputs', 'putchar', 'fputc', 'putc', 'fwrite',
-	# blocking semaphore waits are emulated, see ps4_sync.c
-	'sem_wait', 'sem_timedwait']
+	# semaphores are emulated, see ps4_sync.c
+	'sem_init', 'sem_destroy', 'sem_post', 'sem_trywait', 'sem_wait', 'sem_timedwait', 'sem_getvalue']
 
 PS4_MALLOC_FUNCS = ['malloc', 'free', 'calloc', 'realloc', 'memalign', 'aligned_alloc', 'valloc',
 	'posix_memalign', 'malloc_usable_size']
@@ -50,7 +50,7 @@ def configure(conf):
 	# ps4_crtlib.c - module startup code, replaces broken crtlib.o from the toolchain
 	# ps4_malloc.c - process-wide heap
 	# ps4_stdio.c - thread safe standard output
-	# ps4_sync.c - working semaphore waits
+	# ps4_sync.c - working semaphores
 	# engine and hlsdk-portable keep them in different places
 	# (object name, source, extra flags)
 	objects = [
