@@ -114,10 +114,11 @@ set_sfo VERSION --type Utf8 --maxsize 8 --value "$VERSION"
 
 (cd "$STAGE" && python3 "$ROOT/scripts/ps4/make-gp4.py" "$CONTENT_ID" && "$TOOLS/PkgTool.Core" pkg_build pkg.gp4 "$OUT" > /dev/null)
 PKG="$OUT/$CONTENT_ID.pkg"
-echo "Done: $PKG"
+echo "Done: $PKG ($(du -k "$PKG" | cut -f1) KB, $(date -r "$PKG" +%H:%M:%S))"
 
 if [ -n "$1" ]; then
 	echo "=== Uploading to $1"
-	curl --ftp-create-dirs -T "$PKG" "ftp://$1:2121/data/pkg/"
-	echo "Uploaded. Install it with Package Installer, run GNM Probe, then fetch /data/xash/gnmprobe.txt"
+	curl -sS --ftp-create-dirs -T "$PKG" "ftp://$1:2121/data/pkg/"
+	echo "Uploaded /data/pkg/$CONTENT_ID.pkg"
+	echo "Install GNM Probe with Package Installer, run it, then fetch /data/xash/gnmprobe.txt"
 fi

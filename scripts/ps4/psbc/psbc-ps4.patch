@@ -13,7 +13,7 @@ index 21c97d3..ed6b0cf 100644
  # C11 threads compat (POSIX implementation)
  C11_THREADS_SRCS = src/c11/impl/threads_posix.c src/c11/impl/time.c
 diff --git a/libpsbc/psbc_compile.c b/libpsbc/psbc_compile.c
-index bacbc6a..ae5a19c 100644
+index bacbc6a..b91bdfe 100644
 --- a/libpsbc/psbc_compile.c
 +++ b/libpsbc/psbc_compile.c
 @@ -32,6 +32,7 @@
@@ -243,7 +243,7 @@ index bacbc6a..ae5a19c 100644
      compiler_info.key.ge_wave_size = 64;
      compiler_info.key.ps_wave_size = (gfxlevel >= GFX10_3) ? 32 : 64;
      compiler_info.key.cs_wave_size = (gfxlevel >= GFX10_3) ? 32 : 64;
-@@ -1022,14 +1186,25 @@ PsbcResult psbc_compile_shader(
+@@ -1022,17 +1186,37 @@ PsbcResult psbc_compile_shader(
      /* Shader info + args + postprocess */
      radv_nir_shader_info_init(stage.stage, stage.next_stage, &stage.info);
  
@@ -271,7 +271,19 @@ index bacbc6a..ae5a19c 100644
          RADV_PIPELINE_GRAPHICS, false, &stage.info
      );
  
-@@ -1090,6 +1265,7 @@ PsbcResult psbc_compile_shader(
++    /* Assign parameter exports of the last pre-rasterization stage, normally
++     * done when radv links the pipeline. Without it param_exports is 0 and all
++     * VS outputs except position are removed. Only legacy VS/TES (GFX7-9):
++     * GS outputs go through the copy shader the runtime makes. */
++    if ((mesa_stage == MESA_SHADER_VERTEX && !stage.info.vs.as_es && !stage.info.vs.as_ls) ||
++        (mesa_stage == MESA_SHADER_TESS_EVAL && !stage.info.tes.as_es)) {
++        radv_psbc_set_vs_output_param(gfxlevel, nir, &gfx_state, &stage.info);
++    }
++
+     /* Determine previous stage for shader args declaration.
+      * HS/GS need previous_stage=VERTEX so that the merged-pipeline args
+      * (prolog_inputs, vertex_buffers, etc.) are declared for the NIR
+@@ -1090,6 +1274,7 @@ PsbcResult psbc_compile_shader(
      );
  
      if (!binary) {
@@ -279,7 +291,7 @@ index bacbc6a..ae5a19c 100644
          psbc_shutdown();
          return PSBC_RESULT_COMPILE_ACO;
      }
-@@ -1127,6 +1303,7 @@ PsbcResult psbc_compile_shader(
+@@ -1127,6 +1312,7 @@ PsbcResult psbc_compile_shader(
      out->size = output_size;
  
      free(binary);
@@ -287,3 +299,37 @@ index bacbc6a..ae5a19c 100644
      psbc_shutdown();
  
      return result;
+diff --git a/src/amd/vulkan/radv_shader_info.c b/src/amd/vulkan/radv_shader_info.c
+index bf0698c..1c3c7fe 100644
+--- a/src/amd/vulkan/radv_shader_info.c
++++ b/src/amd/vulkan/radv_shader_info.c
+@@ -1362,6 +1362,15 @@ radv_determine_ngg_settings(const struct radv_compiler_info *compiler_info, stru
+    }
+ }
+ 
++/* psbc: standalone VS/TES compilation has no pipeline to link, so param exports
++ * are never assigned and every output except position is dropped */
++void
++radv_psbc_set_vs_output_param(enum amd_gfx_level gfx_level, const struct nir_shader *nir,
++                              const struct radv_graphics_state_key *gfx_state, struct radv_shader_info *info)
++{
++   radv_set_vs_output_param(gfx_level, nir, gfx_state, info, false, false);
++}
++
+ static void
+ radv_link_shaders_info(const struct radv_compiler_info *compiler_info, struct radv_shader_stage *stages,
+                        const struct radv_graphics_state_key *gfx_state)
+diff --git a/src/amd/vulkan/radv_shader_info.h b/src/amd/vulkan/radv_shader_info.h
+index 705faaa..5ff790a 100644
+--- a/src/amd/vulkan/radv_shader_info.h
++++ b/src/amd/vulkan/radv_shader_info.h
+@@ -347,6 +347,9 @@ void gfx10_get_ngg_info(const struct radv_compiler_info *compiler_info, struct r
+ void gfx10_ngg_set_esgs_ring_itemsize(struct radv_shader_info *es_info, struct radv_shader_info *gs_info,
+                                       struct gfx10_ngg_info *out);
+ 
++void radv_psbc_set_vs_output_param(enum amd_gfx_level gfx_level, const struct nir_shader *nir,
++                                   const struct radv_graphics_state_key *gfx_state, struct radv_shader_info *info);
++
+ void radv_nir_shader_info_link(const struct radv_compiler_info *compiler_info,
+                                const struct radv_graphics_state_key *gfx_state, struct radv_shader_stage *stages);
+ 
