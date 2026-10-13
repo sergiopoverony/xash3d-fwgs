@@ -29,6 +29,7 @@ GNU General Public License for more details.
 #include <gnm_drawcommandbuffer.h>
 #include <gnm_sampler.h>
 #include <gnm_texture.h>
+#include <gpuaddr.h>
 #include <platform.h>
 #include <pm4/sid.h>
 
@@ -296,7 +297,7 @@ static struct
 	int cur_prim;
 
 	gnm_vs_t clear_vs, vs[GNM_GL2_VS_COUNT];
-	gnm_ps_t clear_ps, ps[GNM_GL2_PS_COUNT];
+	gnm_ps_t clear_ps, miptest_ps, ps[GNM_GL2_PS_COUNT];
 
 	bool flip_front; // front face meaning swapped, needed on the console (-gnmnoflip disables)
 	int mipmaps;     // 0 - level 0 only, 1 - power of two textures, 2 - all textures
@@ -2177,6 +2178,201 @@ static void gl_Clear( GLbitfield mask )
 		gnm_dev_flush( "debug" );
 }
 
+/*
+==============================================================================
+
+Mip layout test (-gnmmiptest)
+
+Texture memory is filled with dword indices, a shader reads texels of every
+mip level with texelFetch into a small linear render target, so the log shows
+at which offset and with which row pitch the texture unit reads each level.
+
+==============================================================================
+*/
+#define MIPTEST_RT_W   64
+#define MIPTEST_RT_H   16
+#define MIPTEST_MEM    ( 4 * 1024 * 1024 )
+#define MIPTEST_MARK   0x80000000u // set in every filled dword, 0 is "nothing read"
+
+static void miptest_case( GnmRenderTarget *rt, uint32_t *rtmem, uint32_t *texmem, int w, int h, int levels, bool pad64 )
+{
+	GnmTextureCreateInfo ci;
+	GnmTexture desc;
+	GnmSampler samp;
+	GnmSetViewportInfo vp;
+	GnmViewportTransformControl vtc;
+	GnmBlendControl blend;
+	GnmDepthStencilControl ds;
+	GnmPrimitiveSetup ps;
+	GnmCommandBuffer *cmd;
+	GpaTextureInfo info;
+	uint8_t *table;
+	uint32_t rtpitch;
+	int l;
+
+	memset( &ci, 0, sizeof( ci ));
+	ci.format = GNM_FMT_R8G8B8A8_UNORM;
+	ci.texturetype = GNM_TEXTURE_2D;
+	ci.width = w;
+	ci.height = h;
+	ci.depth = 1;
+	ci.nummiplevels = levels;
+	ci.numslices = 1;
+	ci.numfragments = 1;
+	ci.tilemodehint = GNM_TM_DISPLAY_LINEAR_ALIGNED;
+	ci.mingpumode = GNM_GPU_BASE;
+	if( sceGnmCreateTexture( &desc, &ci ) != GNM_ERROR_OK )
+	{
+		GNM_LOG( "miptest %dx%d %d levels: texture not created\n", w, h, levels );
+		return;
+	}
+
+	GNM_LOG( "miptest %dx%d, %d levels, opengnm pitch %u%s:\n", w, h, levels, sceGnmTexGetPitch( &desc ),
+		pad64 ? ", descriptor pitch set to 64 texel alignment" : "" );
+	if( pad64 )
+		sceGnmTexSetPitch( &desc, ( w + 63 ) & ~63 );
+	sceGnmTexSetBaseAddress( &desc, texmem );
+	info = sceGnmTexBuildInfo( &desc );
+
+	memset( rtmem, 0, MIPTEST_RT_W * MIPTEST_RT_H * 4 );
+
+	cmd = gnm_dev_reserve( 1024, BINDING( 2 ), 0 );
+	gnm_dev.submit_draws++;
+
+	sceGnmDrawCmdSetRenderTarget( cmd, 0, rt );
+	sceGnmDrawCmdSetRenderTargetMask( cmd, 0xf );
+
+	memset( &vp, 0, sizeof( vp ));
+	vp.dmin = 0.0f;
+	vp.dmax = 1.0f;
+	vp.scale[0] = MIPTEST_RT_W * 0.5f;
+	vp.scale[1] = -MIPTEST_RT_H * 0.5f;
+	vp.scale[2] = 1.0f;
+	vp.offset[0] = MIPTEST_RT_W * 0.5f;
+	vp.offset[1] = MIPTEST_RT_H * 0.5f;
+	sceGnmDrawCmdSetViewport( cmd, 0, &vp );
+	memset( &vtc, 0, sizeof( vtc ));
+	vtc.scalex = vtc.offsetx = vtc.scaley = vtc.offsety = vtc.scalez = vtc.offsetz = true;
+	vtc.invertw = true;
+	sceGnmDrawCmdSetViewportTransformControl( cmd, &vtc );
+	sceGnmDrawCmdSetHwScreenOffset( cmd, 0, 0 );
+	sceGnmDrawCmdSetGuardBands( cmd, 1.0f, 1.0f, 1.0f, 1.0f );
+	sceGnmDrawCmdSetScreenScissor( cmd, 0, 0, MIPTEST_RT_W, MIPTEST_RT_H );
+
+	memset( &blend, 0, sizeof( blend ));
+	blend.colorsrcmult = blend.alphasrcmult = GNM_BLEND_ONE;
+	blend.colordstmult = blend.alphadstmult = GNM_BLEND_ZERO;
+	sceGnmDrawCmdSetBlendControl( cmd, 0, &blend );
+	sceGnmDrawCmdSetDbRenderControl( cmd, &(GnmDbRenderControl){ 0 } );
+	memset( &ds, 0, sizeof( ds ));
+	ds.zfunc = ds.stencilfunc = ds.stencilbackfunc = GNM_DEPTH_COMPARE_ALWAYS;
+	sceGnmDrawCmdSetDepthStencilControl( cmd, &ds );
+	memset( &ps, 0, sizeof( ps ));
+	ps.cullmode = GNM_CULL_NONE;
+	ps.frontmode = ps.backmode = GNM_FILL_SOLID;
+	sceGnmDrawCmdSetPrimitiveSetup( cmd, &ps );
+
+	set_shaders( cmd, &gl.clear_vs, &gl.miptest_ps );
+
+	memset( &samp, 0, sizeof( samp ));
+	samp.maxlod = 0xfff;
+	table = gnm_dev_alloc_table( BINDING( 2 ));
+	memset( table, 0, BINDING( 2 ));
+	memcpy( table + BINDING( 1 ), &desc, 32 );
+	memcpy( table + BINDING( 1 ) + 32, &samp, 16 );
+	gnm_dev_set_user_sgpr( cmd, true, gl.miptest_ps.table_reg, (uint32_t)(uintptr_t)table );
+
+	set_primitive( cmd, GNM_PT_TRILIST );
+	sceGnmDrawCmdDrawIndexAuto( cmd, 3 );
+	sceGnmDrawCmdWaitGraphicsWrite( cmd, GNM_ACQUIRE_TARGET_CB0 );
+
+	// next command buffer starts with the display target again
+	gnm_dev_flush( "miptest" );
+	gl.dirty_state = true;
+
+	rtpitch = sceGnmRtGetPitch( rt );
+	for( l = 0; l < levels && l < MIPTEST_RT_H; l++ )
+	{
+		const uint32_t *row = rtmem + l * rtpitch;
+		uint64_t gpa_size = 0, gpa_offset = 0;
+		long long o00 = row[0] ? (long long)( row[0] & ~MIPTEST_MARK ) * 4 : -1;
+		long long o10 = row[1] ? (long long)( row[1] & ~MIPTEST_MARK ) * 4 : -1;
+		long long o01 = row[2] ? (long long)( row[2] & ~MIPTEST_MARK ) * 4 : -1;
+
+		sceGpaComputeSurfaceSizeOffset( &gpa_size, &gpa_offset, &info, l, 0 );
+		GNM_LOG( "  level %2d (%dx%d): offset %lld, x step %lld, row pitch %lld texels; opengnm offset %llu, size %llu; raw %08x %08x %08x %08x\n",
+			l, w >> l ? w >> l : 1, h >> l ? h >> l : 1, o00,
+			o00 >= 0 && o10 >= 0 ? o10 - o00 : -1, o00 >= 0 && o01 >= 0 ? ( o01 - o00 ) / 4 : -1,
+			(unsigned long long)gpa_offset, (unsigned long long)gpa_size, row[0], row[1], row[2], row[3] );
+	}
+}
+
+void PS4_GL_MipTest( void )
+{
+	static const struct
+	{
+		int w, h, levels;
+		bool pad64;
+	} cases[] =
+	{
+		{ 256, 256, 9, false },
+		{ 32, 32, 6, false },
+		{ 460, 80, 1, false },
+		{ 460, 80, 1, true },
+		{ 96, 80, 7, false },
+		{ 96, 80, 7, true },
+		{ 460, 80, 9, false },
+		{ 460, 80, 9, true },
+		{ 48, 48, 6, false },
+		{ 48, 48, 6, true },
+	};
+	GnmRenderTargetCreateInfo ci;
+	GnmRenderTarget rt;
+	uint32_t *rtmem, *texmem;
+	uint64_t size = 0;
+	uint32_t align = 0;
+	size_t i;
+
+	if( !gl.initialized || gnm_dev.hung )
+		return;
+
+	memset( &ci, 0, sizeof( ci ));
+	ci.width = MIPTEST_RT_W;
+	ci.height = MIPTEST_RT_H;
+	ci.numslices = 1;
+	ci.colorfmt = GNM_FMT_R8G8B8A8_UNORM;
+	ci.colortilemodehint = GNM_TM_DISPLAY_LINEAR_ALIGNED;
+	ci.mingpumode = GNM_GPU_BASE;
+	ci.numsamples = 1;
+	ci.numfragments = 1;
+	if( sceGnmCreateRenderTarget( &rt, &ci ) != GNM_ERROR_OK || sceGnmRtCalcByteSize( &size, &align, &rt ) != GNM_ERROR_OK )
+	{
+		GNM_LOG( "miptest: render target not created\n" );
+		return;
+	}
+
+	rtmem = gnm_dev_heap_alloc( size, align < 256 ? 256 : align );
+	texmem = gnm_dev_heap_alloc( MIPTEST_MEM, 256 );
+	if( !rtmem || !texmem )
+	{
+		GNM_LOG( "miptest: out of memory\n" );
+		return;
+	}
+	sceGnmRtSetBaseAddr( &rt, rtmem );
+
+	for( i = 0; i < MIPTEST_MEM / 4; i++ )
+		texmem[i] = MIPTEST_MARK | (uint32_t)i;
+
+	GNM_LOG( "miptest: render target pitch %u, size %llu\n", sceGnmRtGetPitch( &rt ), (unsigned long long)size );
+
+	for( i = 0; i < sizeof( cases ) / sizeof( cases[0] ); i++ )
+		miptest_case( &rt, rtmem, texmem, cases[i].w, cases[i].h, cases[i].levels, cases[i].pad64 );
+
+	gnm_dev_heap_free( rtmem );
+	gnm_dev_heap_free( texmem );
+	GNM_LOG( "miptest: done\n" );
+}
+
 static void gl_ReadPixels( GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, GLvoid *pixels )
 {
 	static bool reported;
@@ -2382,7 +2578,8 @@ static bool load_shaders( void )
 	int i;
 
 	if( !gnm_dev_load_vs( &gl.clear_vs, gnm_shader_clear_vs.data, gnm_shader_clear_vs.size )
-		|| !gnm_dev_load_ps( &gl.clear_ps, gnm_shader_clear_ps.data, gnm_shader_clear_ps.size ))
+		|| !gnm_dev_load_ps( &gl.clear_ps, gnm_shader_clear_ps.data, gnm_shader_clear_ps.size )
+		|| !gnm_dev_load_ps( &gl.miptest_ps, gnm_shader_miptest_ps.data, gnm_shader_miptest_ps.size ))
 		return false;
 
 	for( i = 0; i < GNM_GL2_VS_COUNT; i++ )

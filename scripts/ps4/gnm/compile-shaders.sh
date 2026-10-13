@@ -49,6 +49,7 @@ PYEOF
 
 compile clear.vert.glsl vert clear_vs
 compile clear.frag.glsl frag clear_ps
+compile miptest.frag.glsl frag miptest_ps
 
 # vertex shaders: attribute mask, bit 0 - color, 1 - texcoord0, 2 - texcoord1
 v=0
@@ -75,6 +76,7 @@ done
 	cat "$TMP/arrays.c"
 	echo 'const gnm_shader_blob_t gnm_shader_clear_vs = { clear_vs, sizeof( clear_vs ) };'
 	echo 'const gnm_shader_blob_t gnm_shader_clear_ps = { clear_ps, sizeof( clear_ps ) };'
+	echo 'const gnm_shader_blob_t gnm_shader_miptest_ps = { miptest_ps, sizeof( miptest_ps ) };'
 	echo
 	echo 'const gnm_shader_blob_t gnm_shader_gl2_vs[GNM_GL2_VS_COUNT] ='
 	echo '{'
