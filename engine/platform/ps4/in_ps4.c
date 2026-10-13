@@ -92,7 +92,9 @@ static struct
 
 static CVAR_DEFINE_AUTO( ui_textinput_text, "", FCVAR_PRIVILEGED, "text of the focused menu field, set by the menu for the system keyboard" );
 
-// IME languages (SceImeLanguage), English is always offered first
+static CVAR_DEFINE_AUTO( ime_system_language, "0", FCVAR_ARCHIVE, "system keyboard also offers the system language; the keyboard then starts with it, not English" );
+
+// IME languages (SceImeLanguage)
 #define IME_LANGUAGE_DANISH         0x00000001ULL
 #define IME_LANGUAGE_GERMAN         0x00000002ULL
 #define IME_LANGUAGE_ENGLISH_US     0x00000004ULL
@@ -174,8 +176,12 @@ static void PS4_IME_Open( void )
 	memset( &param, 0, sizeof( param ));
 	param.userId = user;
 	param.type = ORBIS_TYPE_DEFAULT;
-	param.supportedLanguages = IME_LANGUAGE_ENGLISH_US | PS4_IME_SystemLanguage();
-	param.option = IME_OPTION_LANGUAGES_FORCED; // without it the keyboard starts with the system language
+	// the keyboard always starts with the system language if it's offered, English
+	// first is only possible alone; without the forced option the list is ignored
+	param.supportedLanguages = IME_LANGUAGE_ENGLISH_US;
+	if( ime_system_language.value )
+		param.supportedLanguages |= PS4_IME_SystemLanguage();
+	param.option = IME_OPTION_LANGUAGES_FORCED;
 	param.enterLabel = ORBIS_BUTTON_LABEL_DEFAULT;
 	param.maxTextLength = IME_MAX_TEXT;
 	param.inputTextBuffer = (wchar_t *)ps4ime.text;
@@ -443,6 +449,8 @@ int Platform_JoyInit( void )
 
 	if( !Cvar_FindVar( ui_textinput_text.name ))
 		Cvar_RegisterVariable( &ui_textinput_text );
+	if( !Cvar_FindVar( ime_system_language.name ))
+		Cvar_RegisterVariable( &ime_system_language );
 	if( !Cmd_Exists( "ps4_keyboard" ))
 		Cmd_AddCommand( "ps4_keyboard", PS4_IME_Command_f, "opens the system keyboard for the selected menu field" );
 
