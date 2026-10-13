@@ -131,6 +131,7 @@ typedef intptr_t GLsizeiptr;
 #define GL_TEXTURE0                 0x84C0
 
 #define GL_UNPACK_ALIGNMENT         0x0CF5
+#define GL_PACK_ALIGNMENT           0x0D05
 
 #define GL_VENDOR                   0x1F00
 #define GL_RENDERER                 0x1F01
@@ -289,6 +290,7 @@ static struct
 	float clear_color[4];
 	float clear_depth;
 	int unpack_alignment;
+	int pack_alignment;
 
 	// what's emitted into the current command buffer
 	bool dirty_state;
@@ -477,8 +479,13 @@ static void gl_Hint( GLenum target, GLenum mode )
 
 static void gl_PixelStorei( GLenum pname, GLint param )
 {
-	if( pname == GL_UNPACK_ALIGNMENT && ( param == 1 || param == 2 || param == 4 || param == 8 ))
+	if( param != 1 && param != 2 && param != 4 && param != 8 )
+		return;
+
+	if( pname == GL_UNPACK_ALIGNMENT )
 		gl.unpack_alignment = param;
+	else if( pname == GL_PACK_ALIGNMENT )
+		gl.pack_alignment = param;
 }
 
 static void gl_PixelStoref( GLenum pname, GLfloat param )
@@ -2192,18 +2199,99 @@ static void gl_Clear( GLbitfield mask )
 		gnm_dev_flush( "debug" );
 }
 
+/*
+reads the color target being rendered: everything recorded so far is submitted
+and the tiled surface is read on the CPU. Inside an 8x8 micro tile 32-bit pixels
+always have the same layout (checked with opengnm for the whole display target),
+so the tiling math runs once per micro tile.
+*/
 static void gl_ReadPixels( GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, GLvoid *pixels )
 {
-	static bool reported;
+	static GpaSurfaceContext ctx;
+	static const GnmRenderTarget *ctx_rt;
+	static uint32_t pattern[64];
+	const GnmRenderTarget *rt = &gnm_dev.color[gnm_dev.back];
+	const uint8_t *mem = sceGnmRtGetBaseAddr( rt );
+	const int comps = format == GL_RGB ? 3 : 4;
+	size_t stride;
+	int row, col;
 
-	// color targets are tiled, reading them back isn't done yet
-	if( pixels && type == GL_UNSIGNED_BYTE )
-		memset( pixels, 0, (size_t)width * height * ( format == GL_RGB ? 3 : 4 ));
+	if( !pixels || width <= 0 || height <= 0 )
+		return;
 
-	if( !reported )
+	if( type != GL_UNSIGNED_BYTE || ( format != GL_RGB && format != GL_RGBA ))
 	{
-		GNM_LOG( "glReadPixels isn't supported, returning black\n" );
-		reported = true;
+		set_error( GL_INVALID_ENUM );
+		return;
+	}
+
+	stride = ( (size_t)width * comps + gl.pack_alignment - 1 ) & ~(size_t)( gl.pack_alignment - 1 );
+	memset( pixels, 0, stride * height );
+
+	if( gnm_dev.hung )
+		return;
+
+	gnm_dev_flush( "glReadPixels" );
+
+	if( ctx_rt != rt )
+	{
+		const GpaTextureInfo info = sceGnmRtBuildInfo( rt );
+		GpaTilingParams tp;
+		uint64_t size = 0, base = 0, off;
+		uint32_t align = 0;
+		int i;
+
+		if( sceGnmRtCalcByteSize( &size, &align, rt ) != GNM_ERROR_OK || sceGpaTpInit( &tp, &info, 0, 0 ) != GPA_ERR_OK )
+		{
+			GNM_LOG( "glReadPixels: no tiling info for the color target\n" );
+			return;
+		}
+
+		tp.surfaceflags.display = 1;
+		if( sceGpaInitSurfaceContext( &ctx, size, &tp ) != GPA_ERR_OK )
+		{
+			GNM_LOG( "glReadPixels: no surface context for the color target\n" );
+			return;
+		}
+
+		sceGpaComputeSurfaceCoord( &base, NULL, &ctx, 0, 0, 0, 0 );
+		for( i = 0; i < 64; i++ )
+		{
+			sceGpaComputeSurfaceCoord( &off, NULL, &ctx, i & 7, i >> 3, 0, 0 );
+			pattern[i] = (uint32_t)( off - base );
+		}
+
+		ctx_rt = rt;
+	}
+
+	for( row = 0; row < height; row++ )
+	{
+		// OpenGL rows go from the bottom
+		const int sy = gnm_dev.height - 1 - ( y + row );
+		uint8_t *dst = (uint8_t *)pixels + stride * row;
+		uint64_t tile = 0;
+		int tile_x = -1;
+
+		if( sy < 0 || sy >= gnm_dev.height )
+			continue;
+
+		for( col = 0; col < width; col++, dst += comps )
+		{
+			const int sx = x + col;
+			const uint8_t *src;
+
+			if( sx < 0 || sx >= gnm_dev.width )
+				continue;
+
+			if(( sx & ~7 ) != tile_x )
+			{
+				tile_x = sx & ~7;
+				sceGpaComputeSurfaceCoord( &tile, NULL, &ctx, tile_x, sy & ~7, 0, 0 );
+			}
+
+			src = mem + tile + pattern[( sy & 7 ) * 8 + ( sx & 7 )];
+			memcpy( dst, src, comps );
+		}
 	}
 }
 
@@ -2446,6 +2534,7 @@ static void reset_state( void )
 	gl.depth_far = 1.0f;
 	gl.clear_depth = 1.0f;
 	gl.unpack_alignment = 4;
+	gl.pack_alignment = 4;
 	gl.viewport[0] = gl.viewport[1] = 0;
 	gl.viewport[2] = gnm_dev.width;
 	gl.viewport[3] = gnm_dev.height;
