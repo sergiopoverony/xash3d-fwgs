@@ -30,6 +30,7 @@ GNU General Public License for more details.
 #include <gnm_sampler.h>
 #include <gnm_texture.h>
 #include <platform.h>
+#include <pm4/sid.h>
 
 #include "gnm_dev.h"
 #include "gnm_gl.h"
@@ -1706,6 +1707,25 @@ static const gl_texture_t *usable_texture( int unit )
 	return t;
 }
 
+// DRAW_INDEX_2 like Mesa radeonsi and opengnm's generic backend: opengnm's
+// sceGnmDrawCmdDrawIndex calls the firmware helper, the only draw that does,
+// and the first indexed draw of a map hung the GPU on FW 13.02
+static void emit_draw_index( GnmCommandBuffer *cmd, uint32_t count, const void *indices )
+{
+	const uint64_t addr = (uint64_t)(uintptr_t)indices;
+
+	if( cmd->cmdptr + 6 > cmd->endptr )
+		return;
+
+	cmd->cmdptr[0] = PKT3( PKT3_DRAW_INDEX_2, 4, 0 );
+	cmd->cmdptr[1] = count; // max index count in the buffer
+	cmd->cmdptr[2] = (uint32_t)addr & ~1u;
+	cmd->cmdptr[3] = (uint32_t)( addr >> 32 );
+	cmd->cmdptr[4] = count;
+	cmd->cmdptr[5] = 0; // VGT_DRAW_INITIATOR: source select DMA
+	cmd->cmdptr += 6;
+}
+
 // indexed: glDrawElements family, indices are a pointer or an offset into the element buffer;
 // otherwise glDrawArrays and first is the first vertex
 static void draw( GLenum mode, GLint first, GLsizei count, bool indexed, GLenum itype, const GLvoid *indices, GLint basevertex )
@@ -1810,7 +1830,7 @@ static void draw( GLenum mode, GLint first, GLsizei count, bool indexed, GLenum 
 			gnm_dev.submit_draws, mode, count, indexed ? ( idx32 ? "idx32" : "idx16" ) : "arrays", vmin, vmax, vsbits, psbits, numsems,
 			gl.bound[0], t0 ? t0->width : 0, t0 ? t0->height : 0, gl.bound[1], t1 ? t1->width : 0, t1 ? t1->height : 0,
 			gl.blend, gl.depth_test, gl.depth_mask, gl.cull );
-		if( gnm_dev.debug >= 2 )
+		if( gnm_dev.debug == 2 )
 			GNM_LOG( "%s\n", gnm_dev.last_draw );
 	}
 	gnm_dev.submit_draws++;
@@ -1913,7 +1933,7 @@ static void draw( GLenum mode, GLint first, GLsizei count, bool indexed, GLenum 
 		}
 
 		sceGnmDrawCmdSetIndexSize( cmd, idx32 ? GNM_INDEX_32 : GNM_INDEX_16, GNM_POLICY_LRU );
-		sceGnmDrawCmdDrawIndex( cmd, count, idata );
+		emit_draw_index( cmd, count, idata );
 	}
 	else
 	{
@@ -1922,6 +1942,10 @@ static void draw( GLenum mode, GLint first, GLsizei count, bool indexed, GLenum 
 
 	gl.draws++;
 	gl.verts += count;
+
+	// -gnmdebug 3: every draw is its own submit, a hang report names the exact draw
+	if( gnm_dev.debug >= 3 )
+		gnm_dev_flush( "debug" );
 }
 
 static void gl_DrawArrays( GLenum mode, GLint first, GLsizei count )
@@ -1973,7 +1997,7 @@ static void gl_Clear( GLbitfield mask )
 	{
 		snprintf( gnm_dev.last_draw, sizeof( gnm_dev.last_draw ), "clear %u: color %d depth %d (%.2f), scissor %d",
 			gnm_dev.submit_draws, color, depth, gl.clear_depth, gl.scissor_test );
-		if( gnm_dev.debug >= 2 )
+		if( gnm_dev.debug == 2 )
 			GNM_LOG( "%s\n", gnm_dev.last_draw );
 	}
 	gnm_dev.submit_draws++;
@@ -2028,6 +2052,9 @@ static void gl_Clear( GLbitfield mask )
 	// following draws must not see stale depth or color
 	sceGnmDrawCmdWaitGraphicsWrite( cmd, GNM_ACQUIRE_TARGET_CB0 | GNM_ACQUIRE_TARGET_DB );
 	sceGnmDrawCmdSetDbRenderControl( cmd, &(GnmDbRenderControl){ 0 } );
+
+	if( gnm_dev.debug >= 3 )
+		gnm_dev_flush( "debug" );
 }
 
 static void gl_ReadPixels( GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, GLvoid *pixels )

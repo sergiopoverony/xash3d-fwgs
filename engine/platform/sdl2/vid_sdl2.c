@@ -1082,6 +1082,10 @@ qboolean R_Init_Video( ref_graphic_apis_t type )
 		if( SDL_WasInit( SDL_INIT_VIDEO ))
 			SDL_QuitSubSystem( SDL_INIT_VIDEO );
 
+		// that takes events down too, and the engine still pumps them every frame
+		if( !SDL_WasInit( SDL_INIT_EVENTS ))
+			SDL_InitSubSystem( SDL_INIT_EVENTS );
+
 		refState.desktopBitsPixel = 32;
 		glw_state.software = false; // could be left from the software renderer
 

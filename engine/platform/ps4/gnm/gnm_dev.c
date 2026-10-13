@@ -421,7 +421,7 @@ static void submit_and_wait( const char *reason )
 	dcb[0] = cmd->beginptr;
 	dcbsize[0] = (uint32_t)((uintptr_t)cmd->cmdptr - (uintptr_t)cmd->beginptr );
 
-	if( gnm_dev.debug >= 2 || ( gnm_dev.debug && gnm_dev.frame < 3 ))
+	if( gnm_dev.debug == 2 || ( gnm_dev.debug == 1 && gnm_dev.frame < 3 ))
 		GNM_LOG( "submit %u (%s): frame %u, %u draws, %u bytes, tables %u, transient %u\n", gnm_dev.submit_serial, reason,
 			gnm_dev.frame, gnm_dev.submit_draws, dcbsize[0], dev.tables_used, dev.transient_used );
 
@@ -438,7 +438,7 @@ static void submit_and_wait( const char *reason )
 		GNM_LOG( "GPU HANG: last draw: %s\n", gnm_dev.last_draw[0] ? gnm_dev.last_draw : "unknown, run with -gnmdebug" );
 		GNM_LOG( "GPU HANG: rendering stopped, close the game\n" );
 	}
-	else if( gnm_dev.debug >= 2 )
+	else if( gnm_dev.debug == 2 )
 		GNM_LOG( "submit %u done in %llu us\n", gnm_dev.submit_serial, (unsigned long long)( sceKernelGetProcessTime() - start ));
 
 	// everything used by this submit is free now
@@ -477,7 +477,7 @@ void gnm_dev_flush( const char *reason )
 	if( !dev.initialized )
 		return;
 
-	if( last_frame_logged != gnm_dev.frame && gnm_dev.frame < 1000 )
+	if( last_frame_logged != gnm_dev.frame && gnm_dev.frame < 1000 && gnm_dev.debug < 3 )
 	{
 		GNM_LOG( "frame %u split, out of %s\n", gnm_dev.frame, reason );
 		last_frame_logged = gnm_dev.frame;
