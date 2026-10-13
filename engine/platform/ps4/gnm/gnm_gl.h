@@ -23,8 +23,6 @@ GNU General Public License for more details.
 // debug: 0 - quiet, 1 - log submits and texture uploads, 2 - also every draw
 bool PS4_GL_Init( int *width, int *height, bool flip_front, int mipmaps, int debug );
 void PS4_GL_Shutdown( void );
-// -gnmmiptest: logs where the texture unit reads mip levels of linear textures
-void PS4_GL_MipTest( void );
 void PS4_GL_SwapBuffers( void );
 void *PS4_GL_GetProcAddress( const char *name );
 

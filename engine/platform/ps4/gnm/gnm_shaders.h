@@ -36,7 +36,6 @@ typedef struct gnm_shader_blob_s
 
 extern const gnm_shader_blob_t gnm_shader_clear_vs;
 extern const gnm_shader_blob_t gnm_shader_clear_ps;
-extern const gnm_shader_blob_t gnm_shader_miptest_ps;
 extern const gnm_shader_blob_t gnm_shader_gl2_vs[GNM_GL2_VS_COUNT];
 extern const gnm_shader_blob_t gnm_shader_gl2_ps[GNM_GL2_PS_COUNT];
 
