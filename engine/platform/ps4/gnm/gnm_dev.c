@@ -400,7 +400,19 @@ static void submit_and_wait( const char *reason )
 	const uint64_t value = 0x474e4d0000000000ULL | ++gnm_dev.submit_serial;
 	void *dcb[1];
 	uint32_t dcbsize[1];
+	uint64_t start;
 	int res;
+
+	// after a GPU hang more work could take the whole console down, the game keeps
+	// running without picture so the log can be taken and the game can be closed
+	if( gnm_dev.hung )
+	{
+		dev.tables_used = 0;
+		dev.transient_used = 0;
+		heap_release_pending();
+		gnm_dev.submit_draws = 0;
+		return;
+	}
 
 	// make sure color and depth writes land in memory before the label
 	sceGnmDrawCmdWaitGraphicsWrite( cmd, GNM_ACQUIRE_TARGET_CB0 | GNM_ACQUIRE_TARGET_DB );
@@ -409,16 +421,31 @@ static void submit_and_wait( const char *reason )
 	dcb[0] = cmd->beginptr;
 	dcbsize[0] = (uint32_t)((uintptr_t)cmd->cmdptr - (uintptr_t)cmd->beginptr );
 
+	if( gnm_dev.debug >= 2 || ( gnm_dev.debug && gnm_dev.frame < 3 ))
+		GNM_LOG( "submit %u (%s): frame %u, %u draws, %u bytes, tables %u, transient %u\n", gnm_dev.submit_serial, reason,
+			gnm_dev.frame, gnm_dev.submit_draws, dcbsize[0], dev.tables_used, dev.transient_used );
+
+	start = sceKernelGetProcessTime();
 	res = sceGnmSubmitCommandBuffers( 1, dcb, dcbsize, NULL, NULL );
 	if( res < 0 )
 		GNM_LOG( "submit (%s, %u bytes) failed: 0x%x\n", reason, dcbsize[0], res );
 	else if( !wait_label( value ))
-		GNM_LOG( "GPU didn't finish submit %u (%s, %u bytes), last label 0x%llx\n", gnm_dev.submit_serial, reason, dcbsize[0], (unsigned long long)*dev.label );
+	{
+		gnm_dev.hung = true;
+		GNM_LOG( "GPU HANG: submit %u (%s) not finished in %d ms, frame %u, %u draws, %u bytes, last label 0x%llx\n",
+			gnm_dev.submit_serial, reason, WAIT_TIMEOUT_US / 1000, gnm_dev.frame, gnm_dev.submit_draws, dcbsize[0],
+			(unsigned long long)*dev.label );
+		GNM_LOG( "GPU HANG: last draw: %s\n", gnm_dev.last_draw[0] ? gnm_dev.last_draw : "unknown, run with -gnmdebug" );
+		GNM_LOG( "GPU HANG: rendering stopped, close the game\n" );
+	}
+	else if( gnm_dev.debug >= 2 )
+		GNM_LOG( "submit %u done in %llu us\n", gnm_dev.submit_serial, (unsigned long long)( sceKernelGetProcessTime() - start ));
 
 	// everything used by this submit is free now
 	dev.tables_used = 0;
 	dev.transient_used = 0;
 	heap_release_pending();
+	gnm_dev.submit_draws = 0;
 }
 
 GnmCommandBuffer *gnm_dev_reserve( uint32_t dwords, uint32_t tables, uint32_t transient )
@@ -469,6 +496,13 @@ void gnm_dev_present( void )
 		return;
 
 	submit_and_wait( "frame" );
+	if( gnm_dev.hung )
+	{
+		gnm_dev.frame++;
+		begin_cmd();
+		sceKernelUsleep( 16000 ); // keep the game loop at about the same speed
+		return;
+	}
 	sceGnmSubmitDone();
 
 	res = sceVideoOutSubmitFlip( dev.videohandle, gnm_dev.back, ORBIS_VIDEO_OUT_FLIP_VSYNC, 0 );
@@ -730,10 +764,13 @@ static bool init_display( void )
 
 bool gnm_dev_init( void )
 {
+	int debug = gnm_dev.debug;
+
 	if( dev.initialized )
 		return true;
 
 	memset( &gnm_dev, 0, sizeof( gnm_dev ));
+	gnm_dev.debug = debug;
 
 	dev.tables = map_garlic( TABLE_POOL_SIZE, 64 * 1024, 0x80000000ULL, true );
 	if( !dev.tables )

@@ -50,6 +50,12 @@ typedef struct gnm_dev_s
 	GnmCommandBuffer cmd;
 	uint32_t submit_serial; // increments with every submit, see gnm_dev_flush
 	uint32_t frame;
+
+	// diagnostics
+	int debug;              // -gnmdebug level, see PS4_GL_Init
+	bool hung;              // GPU didn't finish a submit, nothing is submitted anymore
+	uint32_t submit_draws;  // draws recorded into the current command buffer
+	char last_draw[192];    // description of the last draw, filled with debug enabled
 } gnm_dev_t;
 
 extern gnm_dev_t gnm_dev;

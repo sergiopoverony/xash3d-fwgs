@@ -51,6 +51,7 @@ static char ps4_basedir[256];
 static char *ps4_argv[PS4_MAX_ARGV];
 static char ps4_logpath[300];
 static qboolean ps4_watchdog_enabled;
+static qboolean ps4_log_sync; // -logsync, -gnmdebug: every write goes to disk, survives a console freeze
 static volatile uint64_t ps4_last_log_time;
 
 static void PS4_InstallCrashHandler( void );
@@ -85,6 +86,9 @@ static void PS4_LogWrite( const char *text, size_t len )
 	{
 		// nothing we can do
 	}
+
+	if( ps4_log_sync )
+		sceKernelFsync( fd );
 
 	close( fd );
 }
@@ -476,6 +480,9 @@ int PS4_GetArgv( int in_argc, char **in_argv, char ***out_argv )
 
 		if( !Q_strcmp( ps4_argv[i], "-ps4watchdog" ))
 			ps4_watchdog_enabled = true;
+
+		if( !Q_strcmp( ps4_argv[i], "-logsync" ) || !Q_strcmp( ps4_argv[i], "-gnmdebug" ))
+			ps4_log_sync = true;
 	}
 
 	*out_argv = ps4_argv;

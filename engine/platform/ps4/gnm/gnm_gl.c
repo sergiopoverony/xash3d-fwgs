@@ -1112,6 +1112,11 @@ static void gl_TexImage2D( GLenum target, GLint level, GLint internalformat, GLs
 
 	if( !upload_texture( t ))
 		set_error( GL_OUT_OF_MEMORY );
+
+	if( gnm_dev.debug )
+		GNM_LOG( "glTexImage2D: texture %u %dx%d, format 0x%x type 0x%x align %d, pitch %u, gpu %p, %s\n",
+			gl.bound[gl.active_unit], width, height, format, type, gl.unpack_alignment, t->pitch, t->gpu,
+			pixels ? "data" : "no data" );
 }
 
 static void gl_TexSubImage2D( GLenum target, GLint level, GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, const GLvoid *pixels )
@@ -1128,8 +1133,23 @@ static void gl_TexSubImage2D( GLenum target, GLint level, GLint x, GLint y, GLsi
 		return;
 	}
 
+	if( gnm_dev.debug )
+	{
+		static int logged;
+		if( logged < 64 || gnm_dev.debug >= 2 )
+		{
+			GNM_LOG( "glTexSubImage2D: texture %u (%dx%d, pitch %u) rect %d,%d %dx%d, format 0x%x type 0x%x align %d, %s\n",
+				gl.bound[gl.active_unit], t->width, t->height, t->pitch, x, y, width, height, format, type, gl.unpack_alignment,
+				t->used_serial == recording_serial() ? "in use, new memory" : "in place" );
+			logged++;
+		}
+	}
+
 	if( !convert_pixels( t->shadow + ((size_t)y * t->width + x ) * 4, t->width * 4, pixels, width, height, format, type ))
+	{
+		GNM_LOG( "glTexSubImage2D: unsupported format 0x%x type 0x%x\n", format, type );
 		return;
+	}
 
 	// GPU still has to read the old contents in this submit, so new data goes to new memory
 	if( t->used_serial == recording_serial( ))
@@ -1780,6 +1800,21 @@ static void draw( GLenum mode, GLint first, GLsizei count, bool indexed, GLenum 
 
 	cmd = gnm_dev_reserve( 1024, tables, transient );
 
+	if( gnm_dev.debug )
+	{
+		const gl_texture_t *t0 = get_texture( gl.bound[0], false ), *t1 = get_texture( gl.bound[1], false );
+
+		snprintf( gnm_dev.last_draw, sizeof( gnm_dev.last_draw ),
+			"draw %u: mode 0x%x count %d %s verts %d..%d, vs %d ps %d, attribs %d, tex0 %u (%dx%d) tex1 %u (%dx%d), "
+			"blend %d depth %d/%d cull %d",
+			gnm_dev.submit_draws, mode, count, indexed ? ( idx32 ? "idx32" : "idx16" ) : "arrays", vmin, vmax, vsbits, psbits, numsems,
+			gl.bound[0], t0 ? t0->width : 0, t0 ? t0->height : 0, gl.bound[1], t1 ? t1->width : 0, t1 ? t1->height : 0,
+			gl.blend, gl.depth_test, gl.depth_mask, gl.cull );
+		if( gnm_dev.debug >= 2 )
+			GNM_LOG( "%s\n", gnm_dev.last_draw );
+	}
+	gnm_dev.submit_draws++;
+
 	if( gl.dirty_state )
 		emit_state( cmd );
 
@@ -1933,6 +1968,15 @@ static void gl_Clear( GLbitfield mask )
 		return;
 
 	cmd = gnm_dev_reserve( 1024, 64, 64 );
+
+	if( gnm_dev.debug )
+	{
+		snprintf( gnm_dev.last_draw, sizeof( gnm_dev.last_draw ), "clear %u: color %d depth %d (%.2f), scissor %d",
+			gnm_dev.submit_draws, color, depth, gl.clear_depth, gl.scissor_test );
+		if( gnm_dev.debug >= 2 )
+			GNM_LOG( "%s\n", gnm_dev.last_draw );
+	}
+	gnm_dev.submit_draws++;
 
 	// state for the clear, then everything goes back on the next draw
 	gl.viewport[0] = gl.viewport[1] = 0;
@@ -2246,8 +2290,10 @@ static void reset_state( void )
 	restart_cb();
 }
 
-bool PS4_GL_Init( int *width, int *height, bool flip_front )
+bool PS4_GL_Init( int *width, int *height, bool flip_front, int debug )
 {
+	gnm_dev.debug = debug;
+
 	if( gl.initialized )
 	{
 		*width = gnm_dev.width;
@@ -2276,7 +2322,7 @@ bool PS4_GL_Init( int *width, int *height, bool flip_front )
 	*width = gnm_dev.width;
 	*height = gnm_dev.height;
 	gl.initialized = true;
-	GNM_LOG( "OpenGL layer ready\n" );
+	GNM_LOG( "OpenGL layer ready, debug level %d\n", debug );
 	return true;
 }
 

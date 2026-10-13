@@ -777,10 +777,17 @@ static rserr_t VID_CreateWindow( const int input_width, const int input_height, 
 #if XASH_PS4
 	if( !glw_state.software )
 	{
-		int w, h;
+		char debug[16];
+		int w, h, debuglevel = 0;
+
+		// -gnmdebug [level]: GNM backend log, 1 - submits and textures, 2 - every draw
+		if( Sys_GetParmFromCmdLine( "-gnmdebug", debug ))
+			debuglevel = Q_atoi( debug );
+		if( debuglevel <= 0 && Sys_CheckParm( "-gnmdebug" ))
+			debuglevel = 1;
 
 		// renders in the native resolution of the display
-		if( !PS4_GL_Init( &w, &h, Sys_CheckParm( "-gnmflipfront" )))
+		if( !PS4_GL_Init( &w, &h, Sys_CheckParm( "-gnmflipfront" ), debuglevel ))
 			return rserr_invalid_context;
 
 		ps4_gnm = true;
