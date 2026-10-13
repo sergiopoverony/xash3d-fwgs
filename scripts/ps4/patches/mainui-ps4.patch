@@ -106,20 +106,26 @@ index df9a835..1ff153e 100644
  				UI_FillRect( pt, m_scItemSize, colorFocus );
  				tempflags |= ETF_FORCECOL;
 diff --git a/controls/Field.cpp b/controls/Field.cpp
-index d602be0..b3c311f 100644
+index d602be0..41beb4c 100644
 --- a/controls/Field.cpp
 +++ b/controls/Field.cpp
-@@ -76,6 +76,10 @@ void CMenuField::_Event( int ev )
- 		VidInit();
- 		break;
- 	case QM_GOTFOCUS:
+@@ -142,6 +142,16 @@ bool CMenuField::KeyDown( int key )
+ {
+ 	bool handled = false;
+ 
 +#if defined( __ORBIS__ )
-+		// PS4 edits the text in the system keyboard dialog, it starts with this
++	// Cross opens the system keyboard, it starts with the text of this field
++	if( key == K_A_BUTTON )
++	{
 +		EngFuncs::CvarSetString( "ui_textinput_text", szBuffer );
++		EngFuncs::ClientCmd( false, "ps4_keyboard\n" );
++		return true;
++	}
 +#endif
- 		EngFuncs::SetTextInputRect( m_scPos.x, m_scPos.y, m_scSize.w, m_scSize.h );
- 		UI_EnableTextInput( true );
- 		break;
++
+ 	// clipboard paste
+ 	if( UI::Key::IsInsert( key ) && EngFuncs::KEY_IsDown( K_SHIFT ))
+ 	{
 diff --git a/controls/Framework.cpp b/controls/Framework.cpp
 index 12d2a29..300f1d3 100644
 --- a/controls/Framework.cpp

@@ -84,7 +84,8 @@ SFO="$STAGE/sce_sys/param.sfo"
 set_sfo() { "$TOOLS/PkgTool.Core" sfo_setentry "$SFO" "$@" > /dev/null; }
 set_sfo APP_TYPE --type Integer --maxsize 4 --value 1
 set_sfo APP_VER --type Utf8 --maxsize 8 --value "$VERSION"
-set_sfo ATTRIBUTE --type Integer --maxsize 4 --value 0
+# 0x2: common dialogs (system keyboard) confirm with Cross, not Circle
+set_sfo ATTRIBUTE --type Integer --maxsize 4 --value 2
 set_sfo CATEGORY --type Utf8 --maxsize 4 --value gd
 set_sfo CONTENT_ID --type Utf8 --maxsize 48 --value "$CONTENT_ID"
 set_sfo DOWNLOAD_DATA_SIZE --type Integer --maxsize 4 --value 0

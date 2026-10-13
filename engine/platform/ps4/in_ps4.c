@@ -70,10 +70,11 @@ static struct
 
 System keyboard
 
-When the engine wants text (console, chat, menu fields) Cross opens the system
-keyboard dialog instead of going to the game. The dialog starts with the text
-being edited and replaces it. Menu fields aren't visible to the engine, the
-menu puts the text of the focused field into ui_textinput_text (mainui patch).
+In the console and chat Cross opens the system keyboard dialog. Menu fields open
+it themselves with the ps4_keyboard command and put their text into
+ui_textinput_text before (mainui patch): only the menu knows that a field is
+selected, text input stays enabled after leaving a field in some menus.
+The dialog starts with the text being edited and replaces it.
 The dialog works with UTF-16, our wchar_t is 32 bits, so buffers are uint16_t.
 
 ==============================================================================
@@ -85,7 +86,7 @@ static struct
 	qboolean wanted;       // engine has text input enabled
 	qboolean open;         // dialog is running
 	qboolean initialized;  // module loaded, common dialog initialized
-	qboolean swallow_cross; // Cross opened the dialog, its release isn't a key event
+	qboolean seen_running; // dialog reported running at least once
 	uint16_t text[IME_MAX_TEXT + 1];
 } ps4ime;
 
@@ -112,6 +113,8 @@ static CVAR_DEFINE_AUTO( ui_textinput_text, "", FCVAR_PRIVILEGED, "text of the f
 #define IME_LANGUAGE_PORTUGUESE_BR  0x00020000ULL
 #define IME_LANGUAGE_TURKISH        0x00080000ULL
 #define IME_LANGUAGE_SPANISH_LA     0x00100000ULL
+
+#define IME_OPTION_LANGUAGES_FORCED 0x00000008
 
 #define SYSTEM_SERVICE_PARAM_ID_LANG 1
 
@@ -172,6 +175,7 @@ static void PS4_IME_Open( void )
 	param.userId = user;
 	param.type = ORBIS_TYPE_DEFAULT;
 	param.supportedLanguages = IME_LANGUAGE_ENGLISH_US | PS4_IME_SystemLanguage();
+	param.option = IME_OPTION_LANGUAGES_FORCED; // without it the keyboard starts with the system language
 	param.enterLabel = ORBIS_BUTTON_LABEL_DEFAULT;
 	param.maxTextLength = IME_MAX_TEXT;
 	param.inputTextBuffer = (wchar_t *)ps4ime.text;
@@ -188,8 +192,15 @@ static void PS4_IME_Open( void )
 	}
 
 	ps4ime.open = true;
+	ps4ime.seen_running = false;
 
-	// nothing reaches the game while the dialog takes the gamepad
+	// nothing reaches the game while the dialog takes the gamepad: held buttons
+	// are released now, buttons still held when it closes don't press again
+	for( size_t i = 0; i < ARRAYSIZE( ps4_buttons ); i++ )
+	{
+		if( FBitSet( ps4pad.buttons, ps4_buttons[i].mask ))
+			Key_Event( ps4_buttons[i].key, false );
+	}
 	PS4_SendAxis( JOY_AXIS_SIDE, 0 );
 	PS4_SendAxis( JOY_AXIS_FWD, 0 );
 	PS4_SendAxis( JOY_AXIS_YAW, 0 );
@@ -308,8 +319,11 @@ static void PS4_IME_Update( void )
 	OrbisDialogResult result;
 	OrbisDialogStatus status = sceImeDialogGetStatus();
 
-	// dialog may report "none" for a while after it's created, only a finished one is done
-	if( status != ORBIS_DIALOG_STATUS_STOPPED )
+	// dialog may report "none" for a while after it's created and a stale state of
+	// the previous one, it's done only when it finishes after running
+	if( status == ORBIS_DIALOG_STATUS_RUNNING )
+		ps4ime.seen_running = true;
+	if( status != ORBIS_DIALOG_STATUS_STOPPED || !ps4ime.seen_running )
 		return;
 
 	memset( &result, 0, sizeof( result ));
@@ -320,6 +334,13 @@ static void PS4_IME_Update( void )
 	Con_Reportf( "IME dialog closed, result %d\n", result.endstatus );
 	if( result.endstatus == ORBIS_DIALOG_OK )
 		PS4_IME_Deliver();
+}
+
+// menu fields open the keyboard with this
+static void PS4_IME_Command_f( void )
+{
+	if( !ps4ime.open )
+		PS4_IME_Open();
 }
 
 void Platform_EnableTextInput( qboolean enable, int x, int y, int w, int h )
@@ -379,27 +400,18 @@ void PS4_InputUpdate( void )
 	{
 		PS4_IME_Update();
 		ps4pad.buttons = data.buttons;
-		// Cross may have been released while the dialog was open
-		if( !ps4ime.open )
-			ps4ime.swallow_cross = FBitSet( data.buttons, ORBIS_PAD_BUTTON_CROSS ) ? true : false;
 		return;
 	}
 
 	uint32_t changed = data.buttons ^ ps4pad.buttons;
 
-	// Cross opens the system keyboard when the engine waits for text
-	if( FBitSet( changed & data.buttons, ORBIS_PAD_BUTTON_CROSS ) && ps4ime.wanted && host.textmode )
+	// Cross opens the system keyboard in the console and chat
+	if( FBitSet( changed & data.buttons, ORBIS_PAD_BUTTON_CROSS ) && ps4ime.wanted && host.textmode
+		&& ( cls.key_dest == key_console || cls.key_dest == key_message ))
 	{
-		ps4ime.swallow_cross = true;
-		ps4pad.buttons = data.buttons;
 		PS4_IME_Open();
+		ps4pad.buttons = data.buttons;
 		return;
-	}
-
-	if( ps4ime.swallow_cross && FBitSet( changed, ORBIS_PAD_BUTTON_CROSS ) && !FBitSet( data.buttons, ORBIS_PAD_BUTTON_CROSS ))
-	{
-		ps4ime.swallow_cross = false;
-		ClearBits( changed, ORBIS_PAD_BUTTON_CROSS );
 	}
 
 	for( size_t i = 0; changed && i < ARRAYSIZE( ps4_buttons ); i++ )
@@ -431,6 +443,8 @@ int Platform_JoyInit( void )
 
 	if( !Cvar_FindVar( ui_textinput_text.name ))
 		Cvar_RegisterVariable( &ui_textinput_text );
+	if( !Cmd_Exists( "ps4_keyboard" ))
+		Cmd_AddCommand( "ps4_keyboard", PS4_IME_Command_f, "opens the system keyboard for the selected menu field" );
 
 	if(( ret = scePadInit( )) < 0 )
 	{
