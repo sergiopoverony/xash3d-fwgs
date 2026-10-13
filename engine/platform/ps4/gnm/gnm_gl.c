@@ -1107,7 +1107,8 @@ Linear aligned layout. Single level textures get rows aligned to 64 texels:
 opengnm's 16 gave slanted lines in the 460x80 menu logo. Mipmapped textures
 use opengnm's layout (pow2 padded levels, AddrLib rules), a texelFetch test on the
 console showed the texture unit reads a 256x256 texture exactly like that,
-my own guess with 64 texel rows on small levels didn't match.
+my own guess with 64 texel rows on small levels didn't match. Other sizes
+were checked by looking at maps and the menu.
 */
 static bool upload_texture( gl_texture_t *t )
 {
