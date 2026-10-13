@@ -578,7 +578,7 @@ static qboolean Key_IsGamepadKey( int keynum )
 
 #if XASH_PS4
 // DualShock 4 layout, applied once over older saved layouts (see key_padlayout)
-#define PS4_PAD_LAYOUT_VERSION 1
+#define PS4_PAD_LAYOUT_VERSION 2
 
 static const struct
 {
@@ -638,6 +638,11 @@ void Key_SetDefaultGamepadBindings( void )
 		Con_Reportf( "%s: applying gamepad layout %d\n", __func__, PS4_PAD_LAYOUT_VERSION );
 
 		Key_ApplyGamepadLayout();
+
+		// configs seen on consoles had "ffpyrl" here: left stick X drove
+		// forward movement too and there was no strafing
+		Cvar_Set( "joy_axis_binding", "sfpyrl" );
+
 		Cvar_DirectSetValue( &key_padlayout, PS4_PAD_LAYOUT_VERSION );
 	}
 #endif
