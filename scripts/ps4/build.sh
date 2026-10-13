@@ -20,6 +20,18 @@ fi
 echo "=== Applying patches"
 scripts/ps4/apply-patches.sh
 
+# opengnm (GPU command buffers, used by the GNM backend of OpenGL renderers),
+# pinned commit, not a submodule because upstream engine doesn't need it
+OPENGNM_REPO=https://github.com/PS4-OpenGNM/opengnm
+OPENGNM_COMMIT=4b295ca54c82c83acf308d1c646a2dfa9ae57350
+if [ "$(git -C 3rdparty/opengnm rev-parse HEAD 2>/dev/null)" != "$OPENGNM_COMMIT" ]; then
+	echo "=== Fetching opengnm"
+	rm -rf 3rdparty/opengnm
+	git init -q 3rdparty/opengnm
+	git -C 3rdparty/opengnm fetch -q --depth 1 "$OPENGNM_REPO" "$OPENGNM_COMMIT"
+	git -C 3rdparty/opengnm checkout -q FETCH_HEAD
+fi
+
 echo "=== Configuring"
 ./waf configure --ps4 -T release $WAF_CONFIGURE > build-ps4-configure.log 2>&1 || {
 	tail -n 30 build-ps4-configure.log

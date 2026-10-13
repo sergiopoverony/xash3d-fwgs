@@ -353,8 +353,10 @@ def configure(conf):
 	elif conf.env.MSVC_WINE:
 		conf.options.BUILD_BUNDLED_DEPS = True
 	elif conf.env.DEST_OS == 'ps4':
-		# Piglet (GLES2) can't compile shaders at runtime, so start with software renderer
+		# no OpenGL driver: ref_gles3compat (gl2_shim) draws through our GNM backend
+		# with precompiled shaders (engine/platform/ps4/gnm), software stays the default
 		conf.options.GL               = False
+		conf.options.GLES3COMPAT      = True
 		conf.options.SOFT             = True
 		conf.options.USE_STBTT        = True  # mainui: no freetype2 package for PS4
 		conf.options.MBEDTLS          = False # FreeBSD-specific entropy code doesn't build
