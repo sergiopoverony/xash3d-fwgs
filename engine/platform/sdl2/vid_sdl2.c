@@ -791,7 +791,7 @@ static rserr_t VID_CreateWindow( const int input_width, const int input_height, 
 			mipmaps = bound( 0, Q_atoi( mips ), 2 );
 
 		// renders in the native resolution of the display
-		if( !PS4_GL_Init( &w, &h, !Sys_CheckParm( "-gnmnoflip" ), mipmaps, debuglevel ))
+		if( !PS4_GL_Init( &w, &h, !Sys_CheckParm( "-gnmnoflip" ), mipmaps, debuglevel, Sys_CheckParm( "-gnmstats" ) ))
 			return rserr_invalid_context;
 
 		ps4_gnm = true;

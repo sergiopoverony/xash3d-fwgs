@@ -53,6 +53,7 @@ typedef struct gnm_dev_s
 
 	// diagnostics
 	int debug;              // -gnmdebug level, see PS4_GL_Init
+	bool stats;             // -gnmstats: frame timing in the log every 300 frames
 	bool hung;              // GPU didn't finish a submit, nothing is submitted anymore
 	uint32_t submit_draws;  // draws recorded into the current command buffer
 	char last_draw[192];    // description of the last draw, filled with debug enabled

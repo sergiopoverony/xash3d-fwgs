@@ -277,6 +277,83 @@ static struct
 	bool initialized;
 } dev;
 
+/*
+==============================================================================
+
+Frame timing (-gnmstats)
+
+A frame is the time between two presents. GPU is the time spent waiting for
+submits to finish, flip is the wait for vsync, CPU is everything else: the
+game and recording of commands.
+
+==============================================================================
+*/
+#define STATS_FRAMES 300
+
+static struct
+{
+	uint64_t frame_start;
+	uint64_t gpu, flip;         // this frame
+	uint32_t submits, draws;    // this frame
+
+	uint32_t frames;            // in the period
+	uint64_t sum_frame, sum_cpu, sum_gpu, sum_flip;
+	uint64_t max_frame, max_cpu, max_gpu;
+	uint64_t sum_submits, sum_draws;
+	uint64_t period_start;
+} stats;
+
+static void stats_end_frame( void )
+{
+	const uint64_t now = sceKernelGetProcessTime();
+	uint64_t frame, cpu;
+
+	if( !stats.frame_start )
+	{
+		stats.frame_start = stats.period_start = now;
+		stats.gpu = stats.flip = 0;
+		stats.submits = stats.draws = 0;
+		return;
+	}
+
+	frame = now - stats.frame_start;
+	cpu = frame > stats.gpu + stats.flip ? frame - stats.gpu - stats.flip : 0;
+
+	stats.frames++;
+	stats.sum_frame += frame;
+	stats.sum_cpu += cpu;
+	stats.sum_gpu += stats.gpu;
+	stats.sum_flip += stats.flip;
+	stats.sum_submits += stats.submits;
+	stats.sum_draws += stats.draws;
+	if( frame > stats.max_frame ) stats.max_frame = frame;
+	if( cpu > stats.max_cpu ) stats.max_cpu = cpu;
+	if( stats.gpu > stats.max_gpu ) stats.max_gpu = stats.gpu;
+
+	if( stats.frames >= STATS_FRAMES )
+	{
+		const double n = stats.frames;
+
+		if( gnm_dev.stats )
+		{
+			GNM_LOG( "stats: %.1f fps; frame %.2f ms (max %.2f); cpu %.2f ms (max %.2f); gpu %.2f ms (max %.2f); vsync wait %.2f ms; %.1f submits, %.0f draws per frame\n",
+				n * 1000000.0 / (double)( now - stats.period_start ),
+				stats.sum_frame / n / 1000.0, stats.max_frame / 1000.0,
+				stats.sum_cpu / n / 1000.0, stats.max_cpu / 1000.0,
+				stats.sum_gpu / n / 1000.0, stats.max_gpu / 1000.0,
+				stats.sum_flip / n / 1000.0,
+				stats.sum_submits / n, stats.sum_draws / n );
+		}
+
+		memset( &stats, 0, sizeof( stats ));
+		stats.period_start = now;
+	}
+
+	stats.frame_start = now;
+	stats.gpu = stats.flip = 0;
+	stats.submits = stats.draws = 0;
+}
+
 // allocations never submit by themselves, gnm_dev_reserve makes room for them
 // before anything of a draw is recorded, so nothing gets lost in the middle
 void *gnm_dev_alloc_table( uint32_t size )
@@ -425,6 +502,9 @@ static void submit_and_wait( const char *reason )
 		GNM_LOG( "submit %u (%s): frame %u, %u draws, %u bytes, tables %u, transient %u\n", gnm_dev.submit_serial, reason,
 			gnm_dev.frame, gnm_dev.submit_draws, dcbsize[0], dev.tables_used, dev.transient_used );
 
+	stats.submits++;
+	stats.draws += gnm_dev.submit_draws;
+
 	start = sceKernelGetProcessTime();
 	res = sceGnmSubmitCommandBuffers( 1, dcb, dcbsize, NULL, NULL );
 	if( res < 0 )
@@ -440,6 +520,8 @@ static void submit_and_wait( const char *reason )
 	}
 	else if( gnm_dev.debug == 2 )
 		GNM_LOG( "submit %u done in %llu us\n", gnm_dev.submit_serial, (unsigned long long)( sceKernelGetProcessTime() - start ));
+
+	stats.gpu += sceKernelGetProcessTime() - start;
 
 	// everything used by this submit is free now
 	dev.tables_used = 0;
@@ -491,6 +573,7 @@ void gnm_dev_present( void )
 {
 	OrbisKernelEvent ev;
 	int out = 0, res;
+	uint64_t flip_start;
 
 	if( !dev.initialized )
 		return;
@@ -505,11 +588,14 @@ void gnm_dev_present( void )
 	}
 	sceGnmSubmitDone();
 
+	flip_start = sceKernelGetProcessTime();
 	res = sceVideoOutSubmitFlip( dev.videohandle, gnm_dev.back, ORBIS_VIDEO_OUT_FLIP_VSYNC, 0 );
 	if( res < 0 )
 		GNM_LOG( "SubmitFlip failed: 0x%x\n", res );
 	else
 		sceKernelWaitEqueue( dev.flipqueue, &ev, 1, &out, NULL );
+	stats.flip += sceKernelGetProcessTime() - flip_start;
+	stats_end_frame();
 
 	gnm_dev.back ^= 1;
 	gnm_dev.frame++;
@@ -765,12 +851,14 @@ static bool init_display( void )
 bool gnm_dev_init( void )
 {
 	int debug = gnm_dev.debug;
+	bool stats_on = gnm_dev.stats;
 
 	if( dev.initialized )
 		return true;
 
 	memset( &gnm_dev, 0, sizeof( gnm_dev ));
 	gnm_dev.debug = debug;
+	gnm_dev.stats = stats_on;
 
 	dev.tables = map_garlic( TABLE_POOL_SIZE, 64 * 1024, 0x80000000ULL, true );
 	if( !dev.tables )

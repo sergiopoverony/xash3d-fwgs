@@ -2542,9 +2542,10 @@ static void reset_state( void )
 	restart_cb();
 }
 
-bool PS4_GL_Init( int *width, int *height, bool flip_front, int mipmaps, int debug )
+bool PS4_GL_Init( int *width, int *height, bool flip_front, int mipmaps, int debug, bool stats )
 {
 	gnm_dev.debug = debug;
+	gnm_dev.stats = stats;
 
 	if( gl.initialized )
 	{
