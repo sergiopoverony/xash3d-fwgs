@@ -105,6 +105,21 @@ index df9a835..1ff153e 100644
  			{
  				UI_FillRect( pt, m_scItemSize, colorFocus );
  				tempflags |= ETF_FORCECOL;
+diff --git a/controls/Field.cpp b/controls/Field.cpp
+index d602be0..b3c311f 100644
+--- a/controls/Field.cpp
++++ b/controls/Field.cpp
+@@ -76,6 +76,10 @@ void CMenuField::_Event( int ev )
+ 		VidInit();
+ 		break;
+ 	case QM_GOTFOCUS:
++#if defined( __ORBIS__ )
++		// PS4 edits the text in the system keyboard dialog, it starts with this
++		EngFuncs::CvarSetString( "ui_textinput_text", szBuffer );
++#endif
+ 		EngFuncs::SetTextInputRect( m_scPos.x, m_scPos.y, m_scSize.w, m_scSize.h );
+ 		UI_EnableTextInput( true );
+ 		break;
 diff --git a/controls/Framework.cpp b/controls/Framework.cpp
 index 12d2a29..300f1d3 100644
 --- a/controls/Framework.cpp

@@ -28,6 +28,7 @@ and drops one of the triggers, so DualShock 4 is read directly through libScePad
 #include <orbis/CommonDialog.h>
 #include <orbis/ImeDialog.h>
 #include <orbis/Sysmodule.h>
+#include <orbis/SystemService.h>
 
 #ifndef ORBIS_PAD_PORT_TYPE_STANDARD
 #define ORBIS_PAD_PORT_TYPE_STANDARD 0
@@ -70,8 +71,10 @@ static struct
 System keyboard
 
 When the engine wants text (console, chat, menu fields) Cross opens the system
-keyboard dialog instead of going to the game. The dialog works with UTF-16,
-our wchar_t is 32 bits, so buffers are uint16_t.
+keyboard dialog instead of going to the game. The dialog starts with the text
+being edited and replaces it. Menu fields aren't visible to the engine, the
+menu puts the text of the focused field into ui_textinput_text (mainui patch).
+The dialog works with UTF-16, our wchar_t is 32 bits, so buffers are uint16_t.
 
 ==============================================================================
 */
@@ -86,7 +89,53 @@ static struct
 	uint16_t text[IME_MAX_TEXT + 1];
 } ps4ime;
 
+static CVAR_DEFINE_AUTO( ui_textinput_text, "", FCVAR_PRIVILEGED, "text of the focused menu field, set by the menu for the system keyboard" );
+
+// IME languages (SceImeLanguage), English is always offered first
+#define IME_LANGUAGE_DANISH         0x00000001ULL
+#define IME_LANGUAGE_GERMAN         0x00000002ULL
+#define IME_LANGUAGE_ENGLISH_US     0x00000004ULL
+#define IME_LANGUAGE_SPANISH        0x00000008ULL
+#define IME_LANGUAGE_FRENCH         0x00000010ULL
+#define IME_LANGUAGE_ITALIAN        0x00000020ULL
+#define IME_LANGUAGE_DUTCH          0x00000040ULL
+#define IME_LANGUAGE_NORWEGIAN      0x00000080ULL
+#define IME_LANGUAGE_POLISH         0x00000100ULL
+#define IME_LANGUAGE_PORTUGUESE_PT  0x00000200ULL
+#define IME_LANGUAGE_RUSSIAN        0x00000400ULL
+#define IME_LANGUAGE_FINNISH        0x00000800ULL
+#define IME_LANGUAGE_SWEDISH        0x00001000ULL
+#define IME_LANGUAGE_JAPANESE       0x00002000ULL
+#define IME_LANGUAGE_KOREAN         0x00004000ULL
+#define IME_LANGUAGE_CHINESE_S      0x00008000ULL
+#define IME_LANGUAGE_CHINESE_T      0x00010000ULL
+#define IME_LANGUAGE_PORTUGUESE_BR  0x00020000ULL
+#define IME_LANGUAGE_TURKISH        0x00080000ULL
+#define IME_LANGUAGE_SPANISH_LA     0x00100000ULL
+
+#define SYSTEM_SERVICE_PARAM_ID_LANG 1
+
+// system language (SceSystemParamLang) to its keyboard language
+static uint64_t PS4_IME_SystemLanguage( void )
+{
+	static const uint64_t langs[] =
+	{
+		IME_LANGUAGE_JAPANESE, 0, IME_LANGUAGE_FRENCH, IME_LANGUAGE_SPANISH, IME_LANGUAGE_GERMAN,
+		IME_LANGUAGE_ITALIAN, IME_LANGUAGE_DUTCH, IME_LANGUAGE_PORTUGUESE_PT, IME_LANGUAGE_RUSSIAN, IME_LANGUAGE_KOREAN,
+		IME_LANGUAGE_CHINESE_T, IME_LANGUAGE_CHINESE_S, IME_LANGUAGE_FINNISH, IME_LANGUAGE_SWEDISH, IME_LANGUAGE_DANISH,
+		IME_LANGUAGE_NORWEGIAN, IME_LANGUAGE_POLISH, IME_LANGUAGE_PORTUGUESE_BR, 0, IME_LANGUAGE_TURKISH,
+		IME_LANGUAGE_SPANISH_LA, 0, IME_LANGUAGE_FRENCH,
+	};
+	int32_t lang = -1;
+
+	if( sceSystemServiceParamGetInt( SYSTEM_SERVICE_PARAM_ID_LANG, &lang ) < 0 || lang < 0 || lang >= (int)ARRAYSIZE( langs ))
+		return 0;
+
+	return langs[lang];
+}
+
 static void PS4_SendAxis( engineAxis_t axis, short value );
+static void PS4_IME_FromUtf8( uint16_t *out, size_t size, const char *in );
 
 static qboolean PS4_IME_Init( void )
 {
@@ -118,11 +167,11 @@ static void PS4_IME_Open( void )
 		return;
 
 	sceUserServiceGetInitialUser( &user );
-	memset( ps4ime.text, 0, sizeof( ps4ime.text ));
+	PS4_IME_FromUtf8( ps4ime.text, IME_MAX_TEXT + 1, cls.key_dest == key_menu ? ui_textinput_text.string : Con_GetEditText( ));
 	memset( &param, 0, sizeof( param ));
 	param.userId = user;
 	param.type = ORBIS_TYPE_DEFAULT;
-	param.supportedLanguages = 0; // all
+	param.supportedLanguages = IME_LANGUAGE_ENGLISH_US | PS4_IME_SystemLanguage();
 	param.enterLabel = ORBIS_BUTTON_LABEL_DEFAULT;
 	param.maxTextLength = IME_MAX_TEXT;
 	param.inputTextBuffer = (wchar_t *)ps4ime.text;
@@ -147,6 +196,36 @@ static void PS4_IME_Open( void )
 	PS4_SendAxis( JOY_AXIS_PITCH, 0 );
 	PS4_SendAxis( JOY_AXIS_LT, 0 );
 	PS4_SendAxis( JOY_AXIS_RT, 0 );
+}
+
+static void PS4_IME_FromUtf8( uint16_t *out, size_t size, const char *in )
+{
+	const byte *p = (const byte *)in;
+	size_t len = 0;
+
+	while( p && *p && len + 2 < size )
+	{
+		uint32_t c = *p++;
+		int extra = 0;
+
+		if( c >= 0xf0 ) { c &= 0x07; extra = 3; }
+		else if( c >= 0xe0 ) { c &= 0x0f; extra = 2; }
+		else if( c >= 0xc0 ) { c &= 0x1f; extra = 1; }
+		else if( c >= 0x80 ) continue; // stray continuation byte
+
+		while( extra-- > 0 && ( *p & 0xc0 ) == 0x80 )
+			c = ( c << 6 ) | ( *p++ & 0x3f );
+
+		if( c >= 0x10000 )
+		{
+			c -= 0x10000;
+			out[len++] = 0xd800 + ( c >> 10 );
+			out[len++] = 0xdc00 + ( c & 0x3ff );
+		}
+		else out[len++] = c;
+	}
+
+	out[len] = 0;
 }
 
 static size_t PS4_IME_ToUtf8( char *out, size_t size, const uint16_t *in )
@@ -192,25 +271,18 @@ static void PS4_IME_KeyPress( int key )
 	Key_Event( key, false );
 }
 
-// typed text goes in like text input events of SDL; menu fields are replaced
-// with it, console and chat get it appended and sent
+// typed text replaces the edited one: Ctrl+C (char 3) clears console, chat and
+// menu fields, then the text goes in like text input events of SDL; console and
+// chat send it right away
 static void PS4_IME_Deliver( void )
 {
 	char text[IME_MAX_TEXT * 4 + 1];
 	const qboolean menu = cls.key_dest == key_menu;
 	const char *p;
-	int i;
 
 	PS4_IME_ToUtf8( text, sizeof( text ), ps4ime.text );
 
-	if( !text[0] && !menu )
-		return;
-
-	if( menu )
-	{
-		for( i = 0; i < 256; i++ )
-			PS4_IME_KeyPress( K_BACKSPACE );
-	}
+	CL_CharEvent( 'c' - 'a' + 1 );
 
 	VGui_ReportTextInput( text );
 
@@ -225,15 +297,19 @@ static void PS4_IME_Deliver( void )
 			CL_CharEvent( ch );
 	}
 
-	if( !menu )
+	if( menu )
+		Cvar_DirectSet( &ui_textinput_text, text );
+	else if( text[0] )
 		PS4_IME_KeyPress( K_ENTER );
 }
 
 static void PS4_IME_Update( void )
 {
 	OrbisDialogResult result;
+	OrbisDialogStatus status = sceImeDialogGetStatus();
 
-	if( sceImeDialogGetStatus() == ORBIS_DIALOG_STATUS_RUNNING )
+	// dialog may report "none" for a while after it's created, only a finished one is done
+	if( status != ORBIS_DIALOG_STATUS_STOPPED )
 		return;
 
 	memset( &result, 0, sizeof( result ));
@@ -241,6 +317,7 @@ static void PS4_IME_Update( void )
 	sceImeDialogTerm();
 	ps4ime.open = false;
 
+	Con_Reportf( "IME dialog closed, result %d\n", result.endstatus );
 	if( result.endstatus == ORBIS_DIALOG_OK )
 		PS4_IME_Deliver();
 }
@@ -351,6 +428,9 @@ int Platform_JoyInit( void )
 		return 1;
 
 	Con_Reportf( "Joystick: PS4 libScePad\n" );
+
+	if( !Cvar_FindVar( ui_textinput_text.name ))
+		Cvar_RegisterVariable( &ui_textinput_text );
 
 	if(( ret = scePadInit( )) < 0 )
 	{

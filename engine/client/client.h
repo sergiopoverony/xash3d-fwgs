@@ -1132,6 +1132,7 @@ void Con_DrawConsole( void );
 void Con_DrawVersion( void );
 int Con_UtfProcessChar( int in );
 int Con_UtfProcessCharForce( int in );
+const char *Con_GetEditText( void );
 int Con_UtfMoveLeft( char *str, int pos );
 int Con_UtfMoveRight( char *str, int pos, int length );
 void Con_DefaultColor( int r, int g, int b, qboolean gameui );
