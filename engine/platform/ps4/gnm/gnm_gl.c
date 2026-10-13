@@ -122,6 +122,8 @@ typedef intptr_t GLsizeiptr;
 #define GL_NEAREST                  0x2600
 #define GL_NEAREST_MIPMAP_NEAREST   0x2700
 #define GL_NEAREST_MIPMAP_LINEAR    0x2702
+#define GL_LINEAR_MIPMAP_NEAREST    0x2701
+#define GL_LINEAR_MIPMAP_LINEAR     0x2703
 #define GL_CLAMP                    0x2900
 #define GL_CLAMP_TO_EDGE            0x812F
 #define GL_MIRRORED_REPEAT          0x8370
@@ -191,13 +193,24 @@ Objects
 
 ==============================================================================
 */
+#define MAX_TEXTURE_LEVELS 14 // 8192x8192 down to 1x1
+
+typedef struct gl_texture_level_s
+{
+	uint8_t *shadow;  // RGBA8 copy, kept for partial updates and reuploads
+	int width, height;
+	uint32_t pitch;   // pixels per row in GPU memory
+	uint64_t offset;  // from the texture base address
+} gl_texture_level_t;
+
 typedef struct gl_texture_s
 {
 	bool exists;
-	int width, height;
-	uint32_t pitch;      // pixels per row in GPU memory
+	int width, height;    // level 0
+	int numlevels;        // levels in GPU memory
+	bool dirty;           // shadow copies changed, GPU memory is rebuilt before the next draw
 	void *gpu;
-	uint8_t *shadow;     // RGBA8 copy of level 0, kept for partial updates
+	gl_texture_level_t levels[MAX_TEXTURE_LEVELS];
 	GnmTexture desc;
 	GLenum min_filter, mag_filter, wrap_s, wrap_t;
 	uint32_t used_serial; // submit that reads current GPU memory
@@ -286,6 +299,7 @@ static struct
 	gnm_ps_t clear_ps, ps[GNM_GL2_PS_COUNT];
 
 	bool flip_front; // front face meaning swapped, needed on the console (-gnmnoflip disables)
+	int mipmaps;     // 0 - level 0 only, 1 - power of two textures, 2 - all textures
 
 	// statistics, logged at first frames
 	uint32_t draws, verts;
@@ -912,13 +926,23 @@ static void gl_GenTextures( GLsizei n, GLuint *textures )
 	}
 }
 
+static void free_texture_level( gl_texture_level_t *l )
+{
+	free( l->shadow );
+	memset( l, 0, sizeof( *l ));
+}
+
 static void free_texture_storage( gl_texture_t *t )
 {
+	int i;
+
 	gnm_dev_heap_free( t->gpu );
-	free( t->shadow );
 	t->gpu = NULL;
-	t->shadow = NULL;
+	for( i = 0; i < MAX_TEXTURE_LEVELS; i++ )
+		free_texture_level( &t->levels[i] );
 	t->width = t->height = 0;
+	t->numlevels = 0;
+	t->dirty = false;
 }
 
 static void gl_DeleteTextures( GLsizei n, const GLuint *textures )
@@ -1039,15 +1063,59 @@ static bool convert_pixels( uint8_t *dst, int dststride, const uint8_t *src, int
 	return true;
 }
 
-// creates GPU storage for the texture and fills it from the shadow copy
+static uint32_t next_pow2( uint32_t v )
+{
+	uint32_t p = 1;
+
+	while( p < v )
+		p <<= 1;
+	return p;
+}
+
+// levels uploaded with the expected sizes, mipmaps are used only when the chain
+// reaches 1x1 without holes, like a complete texture in OpenGL
+static int count_texture_levels( const gl_texture_t *t )
+{
+	int i, w = t->width, h = t->height;
+
+	if( !gl.mipmaps )
+		return 1;
+
+	if( gl.mipmaps == 1 && ( next_pow2( w ) != (uint32_t)w || next_pow2( h ) != (uint32_t)h ))
+		return 1;
+
+	for( i = 1; i < MAX_TEXTURE_LEVELS; i++ )
+	{
+		if( w == 1 && h == 1 )
+			break;
+
+		w = w > 1 ? w >> 1 : 1;
+		h = h > 1 ? h >> 1 : 1;
+
+		if( !t->levels[i].shadow || t->levels[i].width != w || t->levels[i].height != h )
+			return 1;
+	}
+
+	return i;
+}
+
+/*
+creates GPU memory for the texture and fills it from the shadow copies
+
+Linear aligned layout as the texture unit reads it, which isn't what opengnm
+computes: rows are 64 texels (256 bytes) aligned, opengnm's 16 texels gave
+slanted lines in the 460x80 menu logo. Mipmapped textures are pow2 padded,
+level N > 0 takes NextPow2( size ) >> N texels, like AddrLib's pow2Pad. Levels
+follow each other, 256 byte aligned since the pitch is.
+*/
 static bool upload_texture( gl_texture_t *t )
 {
 	GnmTextureCreateInfo ci;
 	uint64_t size = 0;
-	uint32_t align = 0;
 	GnmError err;
 	uint8_t *gpu;
-	int y;
+	int i, y;
+	int numlevels = count_texture_levels( t );
 
 	memset( &ci, 0, sizeof( ci ));
 	ci.format = GNM_FMT_R8G8B8A8_UNORM;
@@ -1055,44 +1123,54 @@ static bool upload_texture( gl_texture_t *t )
 	ci.width = t->width;
 	ci.height = t->height;
 	ci.depth = 1;
-	ci.nummiplevels = 1;
+	ci.nummiplevels = numlevels;
 	ci.numslices = 1;
 	ci.numfragments = 1;
 	ci.tilemodehint = GNM_TM_DISPLAY_LINEAR_ALIGNED;
 	ci.mingpumode = GNM_GPU_BASE;
 
 	err = sceGnmCreateTexture( &t->desc, &ci );
-	if( err == GNM_ERROR_OK )
-		err = sceGnmTexCalcByteSize( &size, &align, &t->desc );
 	if( err != GNM_ERROR_OK )
 	{
-		GNM_LOG( "texture %dx%d: %s\n", t->width, t->height, sceGnmStrError( err ));
+		GNM_LOG( "texture %dx%d, %d levels: %s\n", t->width, t->height, numlevels, sceGnmStrError( err ));
 		return false;
 	}
 
-	// opengnm pads linear aligned rows to 16 texels (460 -> 464), but the main
-	// menu logo (460x80) came out with slanted lines, so the texture unit
-	// evidently steps rows by a coarser pitch; 64 texels (256 bytes, the pipe
-	// interleave) is valid for both the descriptor and the hardware
-	if( sceGnmTexGetPitch( &t->desc ) % 64 )
+	for( i = 0; i < numlevels; i++ )
 	{
-		uint32_t pitch = ( t->width + 63 ) & ~63;
-		sceGnmTexSetPitch( &t->desc, pitch );
-		size = (uint64_t)pitch * t->height * 4;
-		if( align < 256 )
-			align = 256;
+		gl_texture_level_t *l = &t->levels[i];
+		uint32_t w = l->width, h = l->height;
+
+		if( i > 0 )
+		{
+			w = next_pow2( t->width ) >> i;
+			h = next_pow2( t->height ) >> i;
+			if( w < 1 ) w = 1;
+			if( h < 1 ) h = 1;
+		}
+
+		l->pitch = ( w + 63 ) & ~63;
+		l->offset = size;
+		size += (uint64_t)l->pitch * h * 4;
 	}
 
-	gpu = gnm_dev_heap_alloc( size, align );
+	gpu = gnm_dev_heap_alloc( size, 256 );
 	if( !gpu )
 		return false;
 
-	t->pitch = sceGnmTexGetPitch( &t->desc );
-	for( y = 0; y < t->height; y++ )
-		memcpy( gpu + (size_t)y * t->pitch * 4, t->shadow + (size_t)y * t->width * 4, t->width * 4 );
+	for( i = 0; i < numlevels; i++ )
+	{
+		const gl_texture_level_t *l = &t->levels[i];
+
+		for( y = 0; y < l->height; y++ )
+			memcpy( gpu + l->offset + (size_t)y * l->pitch * 4, l->shadow + (size_t)y * l->width * 4, l->width * 4 );
+	}
 
 	gnm_dev_heap_free( t->gpu );
 	t->gpu = gpu;
+	t->numlevels = numlevels;
+	t->dirty = false;
+	sceGnmTexSetPitch( &t->desc, t->levels[0].pitch );
 	sceGnmTexSetBaseAddress( &t->desc, gpu );
 	t->used_serial = 0;
 	return true;
@@ -1101,26 +1179,33 @@ static bool upload_texture( gl_texture_t *t )
 static void gl_TexImage2D( GLenum target, GLint level, GLint internalformat, GLsizei width, GLsizei height, GLint border, GLenum format, GLenum type, const GLvoid *pixels )
 {
 	gl_texture_t *t = bound_texture();
+	gl_texture_level_t *l;
 
 	if( !t || target != GL_TEXTURE_2D )
 		return;
 
-	// mipmaps aren't supported yet, textures are sampled from level 0
-	if( level != 0 )
-		return;
-
-	if( width <= 0 || height <= 0 || width > 8192 || height > 8192 )
+	if( level < 0 || level >= MAX_TEXTURE_LEVELS || width <= 0 || height <= 0 || width > 8192 || height > 8192 )
 	{
 		set_error( GL_INVALID_VALUE );
 		return;
 	}
 
-	free_texture_storage( t );
-	t->width = width;
-	t->height = height;
-	t->shadow = calloc( 1, (size_t)width * height * 4 );
+	// level 0 defines the texture, other levels are checked against it when uploading
+	if( level == 0 )
+	{
+		free_texture_storage( t );
+		t->width = width;
+		t->height = height;
+	}
 
-	if( pixels && !convert_pixels( t->shadow, width * 4, pixels, width, height, format, type ))
+	l = &t->levels[level];
+	free_texture_level( l );
+	l->width = width;
+	l->height = height;
+	l->shadow = calloc( 1, (size_t)width * height * 4 );
+	t->dirty = true;
+
+	if( pixels && !convert_pixels( l->shadow, width * 4, pixels, width, height, format, type ))
 	{
 		static bool reported;
 		if( !reported )
@@ -1130,24 +1215,26 @@ static void gl_TexImage2D( GLenum target, GLint level, GLint internalformat, GLs
 		}
 	}
 
-	if( !upload_texture( t ))
-		set_error( GL_OUT_OF_MEMORY );
-
-	if( gnm_dev.debug )
-		GNM_LOG( "glTexImage2D: texture %u %dx%d, format 0x%x type 0x%x align %d, pitch %u, gpu %p, %s\n",
-			gl.bound[gl.active_unit], width, height, format, type, gl.unpack_alignment, t->pitch, t->gpu,
+	if( gnm_dev.debug && level == 0 )
+		GNM_LOG( "glTexImage2D: texture %u %dx%d, format 0x%x type 0x%x align %d, %s\n",
+			gl.bound[gl.active_unit], width, height, format, type, gl.unpack_alignment,
 			pixels ? "data" : "no data" );
 }
 
 static void gl_TexSubImage2D( GLenum target, GLint level, GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, const GLvoid *pixels )
 {
 	gl_texture_t *t = bound_texture();
+	gl_texture_level_t *l;
 	int row;
 
-	if( !t || target != GL_TEXTURE_2D || level != 0 || !t->shadow || !pixels )
+	if( !t || target != GL_TEXTURE_2D || level < 0 || level >= MAX_TEXTURE_LEVELS || !pixels )
 		return;
 
-	if( x < 0 || y < 0 || x + width > t->width || y + height > t->height )
+	l = &t->levels[level];
+	if( !l->shadow )
+		return;
+
+	if( x < 0 || y < 0 || x + width > l->width || y + height > l->height )
 	{
 		set_error( GL_INVALID_VALUE );
 		return;
@@ -1158,30 +1245,31 @@ static void gl_TexSubImage2D( GLenum target, GLint level, GLint x, GLint y, GLsi
 		static int logged;
 		if( logged < 64 || gnm_dev.debug >= 2 )
 		{
-			GNM_LOG( "glTexSubImage2D: texture %u (%dx%d, pitch %u) rect %d,%d %dx%d, format 0x%x type 0x%x align %d, %s\n",
-				gl.bound[gl.active_unit], t->width, t->height, t->pitch, x, y, width, height, format, type, gl.unpack_alignment,
-				t->used_serial == recording_serial() ? "in use, new memory" : "in place" );
+			GNM_LOG( "glTexSubImage2D: texture %u level %d (%dx%d) rect %d,%d %dx%d, format 0x%x type 0x%x align %d, %s\n",
+				gl.bound[gl.active_unit], level, l->width, l->height, x, y, width, height, format, type, gl.unpack_alignment,
+				t->dirty || !t->gpu ? "pending upload" : t->used_serial == recording_serial() ? "in use, new memory" : "in place" );
 			logged++;
 		}
 	}
 
-	if( !convert_pixels( t->shadow + ((size_t)y * t->width + x ) * 4, t->width * 4, pixels, width, height, format, type ))
+	if( !convert_pixels( l->shadow + ((size_t)y * l->width + x ) * 4, l->width * 4, pixels, width, height, format, type ))
 	{
 		GNM_LOG( "glTexSubImage2D: unsupported format 0x%x type 0x%x\n", format, type );
 		return;
 	}
 
-	// GPU still has to read the old contents in this submit, so new data goes to new memory
-	if( t->used_serial == recording_serial( ))
+	// GPU still has to read the old contents in this submit, new memory is made
+	// before the next draw that uses the texture
+	if( t->dirty || !t->gpu || level >= t->numlevels || t->used_serial == recording_serial( ))
 	{
-		upload_texture( t );
+		t->dirty = true;
 		return;
 	}
 
 	for( row = 0; row < height; row++ )
 	{
-		memcpy( (uint8_t *)t->gpu + ((size_t)( y + row ) * t->pitch + x ) * 4,
-			t->shadow + ((size_t)( y + row ) * t->width + x ) * 4, width * 4 );
+		memcpy( (uint8_t *)t->gpu + l->offset + ((size_t)( y + row ) * l->pitch + x ) * 4,
+			l->shadow + ((size_t)( y + row ) * l->width + x ) * 4, width * 4 );
 	}
 }
 
@@ -1199,7 +1287,20 @@ static GnmSampler make_sampler( const gl_texture_t *t )
 	s.clampz = GNM_TEX_CLAMP_CLAMP_LAST_TEXEL;
 	s.xyminfilter = min_linear ? GNM_FILTER_BILINEAR : GNM_FILTER_POINT;
 	s.xymagfilter = mag_linear ? GNM_FILTER_BILINEAR : GNM_FILTER_POINT;
-	s.mipfilter = GNM_MIPFILTER_NONE;
+	switch( t->numlevels > 1 ? t->min_filter : 0 )
+	{
+	case GL_NEAREST_MIPMAP_NEAREST:
+	case GL_LINEAR_MIPMAP_NEAREST:
+		s.mipfilter = GNM_MIPFILTER_POINT;
+		break;
+	case GL_NEAREST_MIPMAP_LINEAR:
+	case GL_LINEAR_MIPMAP_LINEAR:
+		s.mipfilter = GNM_MIPFILTER_LINEAR;
+		break;
+	default:
+		s.mipfilter = GNM_MIPFILTER_NONE; // level 0 only
+		break;
+	}
 	s.zfilter = GNM_ZFILTER_NONE;
 	s.maxlod = 0xfff;
 	return s;
@@ -1719,6 +1820,8 @@ static const gl_texture_t *usable_texture( int unit )
 {
 	gl_texture_t *t = get_texture( gl.bound[unit], false );
 
+	if( t && t->dirty && t->levels[0].shadow && !upload_texture( t ))
+		t->dirty = false; // out of memory, keep the old contents
 	if( !t || !t->gpu )
 		return &gl.white;
 
@@ -2304,8 +2407,9 @@ static bool init_white_texture( void )
 	memset( t, 0, sizeof( *t ));
 	t->exists = true;
 	t->width = t->height = 1;
-	t->shadow = malloc( 4 );
-	memset( t->shadow, 255, 4 );
+	t->levels[0].width = t->levels[0].height = 1;
+	t->levels[0].shadow = malloc( 4 );
+	memset( t->levels[0].shadow, 255, 4 );
 	t->min_filter = t->mag_filter = GL_NEAREST;
 	t->wrap_s = t->wrap_t = GL_CLAMP_TO_EDGE;
 	return upload_texture( t );
@@ -2334,7 +2438,7 @@ static void reset_state( void )
 	restart_cb();
 }
 
-bool PS4_GL_Init( int *width, int *height, bool flip_front, int debug )
+bool PS4_GL_Init( int *width, int *height, bool flip_front, int mipmaps, int debug )
 {
 	gnm_dev.debug = debug;
 
@@ -2361,6 +2465,7 @@ bool PS4_GL_Init( int *width, int *height, bool flip_front, int debug )
 	}
 
 	gl.flip_front = flip_front;
+	gl.mipmaps = mipmaps;
 	reset_state();
 
 	*width = gnm_dev.width;

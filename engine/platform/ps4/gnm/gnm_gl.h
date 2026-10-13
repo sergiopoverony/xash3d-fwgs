@@ -19,8 +19,9 @@ GNU General Public License for more details.
 
 // opens the display and creates the context, returns the screen size;
 // flip_front is true by default (-gnmnoflip turns it off): the viewport flips Y, which inverts winding;
+// mipmaps: 0 - off, 1 - power of two textures only, 2 - all textures;
 // debug: 0 - quiet, 1 - log submits and texture uploads, 2 - also every draw
-bool PS4_GL_Init( int *width, int *height, bool flip_front, int debug );
+bool PS4_GL_Init( int *width, int *height, bool flip_front, int mipmaps, int debug );
 void PS4_GL_Shutdown( void );
 void PS4_GL_SwapBuffers( void );
 void *PS4_GL_GetProcAddress( const char *name );

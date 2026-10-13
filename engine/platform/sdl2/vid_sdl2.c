@@ -777,8 +777,8 @@ static rserr_t VID_CreateWindow( const int input_width, const int input_height, 
 #if XASH_PS4
 	if( !glw_state.software )
 	{
-		char debug[16];
-		int w, h, debuglevel = 0;
+		char debug[16], mips[16];
+		int w, h, debuglevel = 0, mipmaps = 2;
 
 		// -gnmdebug [level]: GNM backend log, 1 - submits and textures, 2 - every draw
 		if( Sys_GetParmFromCmdLine( "-gnmdebug", debug ))
@@ -786,8 +786,12 @@ static rserr_t VID_CreateWindow( const int input_width, const int input_height, 
 		if( debuglevel <= 0 && Sys_CheckParm( "-gnmdebug" ))
 			debuglevel = 1;
 
+		// -gnmmips 0|1|2: no mipmaps, power of two textures only, all textures
+		if( Sys_GetParmFromCmdLine( "-gnmmips", mips ))
+			mipmaps = bound( 0, Q_atoi( mips ), 2 );
+
 		// renders in the native resolution of the display
-		if( !PS4_GL_Init( &w, &h, !Sys_CheckParm( "-gnmnoflip" ), debuglevel ))
+		if( !PS4_GL_Init( &w, &h, !Sys_CheckParm( "-gnmnoflip" ), mipmaps, debuglevel ))
 			return rserr_invalid_context;
 
 		ps4_gnm = true;
