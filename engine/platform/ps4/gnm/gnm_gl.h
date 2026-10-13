@@ -18,7 +18,7 @@ GNU General Public License for more details.
 #include <stdbool.h>
 
 // opens the display and creates the context, returns the screen size;
-// flip_front swaps front face winding in case culling turns out inverted;
+// flip_front is true by default (-gnmnoflip turns it off): the viewport flips Y, which inverts winding;
 // debug: 0 - quiet, 1 - log submits and texture uploads, 2 - also every draw
 bool PS4_GL_Init( int *width, int *height, bool flip_front, int debug );
 void PS4_GL_Shutdown( void );

@@ -690,9 +690,9 @@ static void SetFullscreenModeFromCommandLine( void )
 static void R_CollectRendererNames( void )
 {
 	// ordering is important!
-	// on PS4 the GNM backend for OpenGL renderers is new, so software stays
-	// the default and OpenGL is used only when chosen explicitly
-#define SOFT_FIRST ( XASH_PS4 && XASH_REF_SOFT_ENABLED )
+	// on PS4 gles3compat runs on the GNM backend and is the default,
+	// software is used when it is chosen with -ref soft or GNM fails to start
+#define SOFT_FIRST ( XASH_PS4 && XASH_REF_SOFT_ENABLED && !XASH_REF_GLES3COMPAT_ENABLED )
 	static const char *short_names[] =
 	{
 #if SOFT_FIRST

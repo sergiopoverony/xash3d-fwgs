@@ -787,7 +787,7 @@ static rserr_t VID_CreateWindow( const int input_width, const int input_height, 
 			debuglevel = 1;
 
 		// renders in the native resolution of the display
-		if( !PS4_GL_Init( &w, &h, Sys_CheckParm( "-gnmflipfront" ), debuglevel ))
+		if( !PS4_GL_Init( &w, &h, !Sys_CheckParm( "-gnmnoflip" ), debuglevel ))
 			return rserr_invalid_context;
 
 		ps4_gnm = true;

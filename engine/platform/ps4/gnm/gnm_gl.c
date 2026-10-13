@@ -285,7 +285,7 @@ static struct
 	gnm_vs_t clear_vs, vs[GNM_GL2_VS_COUNT];
 	gnm_ps_t clear_ps, ps[GNM_GL2_PS_COUNT];
 
-	bool flip_front; // -gnmflipfront: swap front face meaning if culling turns out inverted
+	bool flip_front; // front face meaning swapped, needed on the console (-gnmnoflip disables)
 
 	// statistics, logged at first frames
 	uint32_t draws, verts;
