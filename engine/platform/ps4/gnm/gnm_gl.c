@@ -1070,6 +1070,19 @@ static bool upload_texture( gl_texture_t *t )
 		return false;
 	}
 
+	// opengnm pads linear aligned rows to 16 texels (460 -> 464), but the main
+	// menu logo (460x80) came out with slanted lines, so the texture unit
+	// evidently steps rows by a coarser pitch; 64 texels (256 bytes, the pipe
+	// interleave) is valid for both the descriptor and the hardware
+	if( sceGnmTexGetPitch( &t->desc ) % 64 )
+	{
+		uint32_t pitch = ( t->width + 63 ) & ~63;
+		sceGnmTexSetPitch( &t->desc, pitch );
+		size = (uint64_t)pitch * t->height * 4;
+		if( align < 256 )
+			align = 256;
+	}
+
 	gpu = gnm_dev_heap_alloc( size, align );
 	if( !gpu )
 		return false;
