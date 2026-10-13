@@ -390,6 +390,10 @@ static void Key_Unbindall_f( void )
 Key_Reset_f
 ===================
 */
+#if XASH_PS4
+static void Key_ApplyGamepadLayout( void );
+#endif
+
 static void Key_Reset_f( void )
 {
 	// clear all keys first
@@ -402,6 +406,10 @@ static void Key_Reset_f( void )
 	// apply default values
 	for( int i = 0; i < ARRAYSIZE( keynames ); i++ )
 		Key_SetBinding( keynames[i].keynum, keynames[i].binding );
+
+#if XASH_PS4
+	Key_ApplyGamepadLayout();
+#endif
 }
 
 /*
@@ -568,6 +576,54 @@ static qboolean Key_IsGamepadKey( int keynum )
 	return ( keynum >= K_JOY1 && keynum <= K_JOY4 ) || ( keynum >= K_AUX1 && keynum <= K_AUX32 );
 }
 
+#if XASH_PS4
+// DualShock 4 layout, applied once over older saved layouts (see key_padlayout)
+#define PS4_PAD_LAYOUT_VERSION 1
+
+static const struct
+{
+	int key;
+	const char *binding;
+} ps4_pad_layout[] =
+{
+{ K_LTRIGGER,    "+attack2" },     // L2
+{ K_L2_BUTTON,   "+attack2" },
+{ K_RTRIGGER,    "+attack" },      // R2
+{ K_R2_BUTTON,   "+attack" },
+{ K_L1_BUTTON,   "invprev" },
+{ K_R1_BUTTON,   "invnext" },
+{ K_X_BUTTON,    "+use" },         // square
+{ K_B_BUTTON,    "+duck" },        // circle
+{ K_A_BUTTON,    "+jump" },        // cross
+{ K_Y_BUTTON,    "+reload" },      // triangle
+{ K_LSTICK,      "+voicerecord" }, // L3
+{ K_RSTICK,      "impulse 100" },  // R3, flashlight
+{ K_DPAD_UP,     "invnext" },
+{ K_DPAD_DOWN,   "invprev" },
+{ K_DPAD_RIGHT,  "lastinv" },
+{ K_DPAD_LEFT,   "+showscores" },
+};
+
+static CVAR_DEFINE_AUTO( key_padlayout, "0", FCVAR_ARCHIVE|FCVAR_PRIVILEGED, "version of default gamepad layout applied to the bindings, internal" );
+
+static void Key_ApplyGamepadLayout( void )
+{
+	for( int i = 0; i < ARRAYSIZE( ps4_pad_layout ); i++ )
+		Key_SetBinding( ps4_pad_layout[i].key, ps4_pad_layout[i].binding );
+}
+
+static const char *Key_DefaultGamepadBinding( int keynum, const char *binding )
+{
+	for( int i = 0; i < ARRAYSIZE( ps4_pad_layout ); i++ )
+	{
+		if( ps4_pad_layout[i].key == keynum )
+			return ps4_pad_layout[i].binding;
+	}
+
+	return binding;
+}
+#endif
+
 void Key_SetDefaultGamepadBindings( void )
 {
 	// some gamepad keys like START can be bound by desktop configs too
@@ -575,19 +631,14 @@ void Key_SetDefaultGamepadBindings( void )
 	int i;
 
 #if XASH_PS4
+	// the layout changed, put new defaults over the buttons it covers once,
+	// after that the player's own changes are kept
+	if( key_padlayout.value < PS4_PAD_LAYOUT_VERSION )
 	{
-		// PlayStation games traditionally fire with R2, swap fire buttons
-		// if they still have generic defaults saved by earlier versions
-		const char *r1 = Key_GetBinding( K_R1_BUTTON );
-		const char *rt = Key_GetBinding( K_RTRIGGER );
+		Con_Reportf( "%s: applying gamepad layout %d\n", __func__, PS4_PAD_LAYOUT_VERSION );
 
-		if( r1 && rt && !Q_strcmp( r1, "+attack" ) && !Q_strcmp( rt, "+attack2" ))
-		{
-			Con_Reportf( "%s: moving fire to R2\n", __func__ );
-			Key_SetBinding( K_R1_BUTTON, "+attack2" );
-			Key_SetBinding( K_RTRIGGER, "+attack" );
-			Key_SetBinding( K_R2_BUTTON, "+attack" );
-		}
+		Key_ApplyGamepadLayout();
+		Cvar_DirectSetValue( &key_padlayout, PS4_PAD_LAYOUT_VERSION );
 	}
 #endif
 
@@ -614,11 +665,7 @@ void Key_SetDefaultGamepadBindings( void )
 
 		binding = keynames[i].binding;
 #if XASH_PS4
-		// PlayStation games traditionally fire with R2
-		if( keynames[i].keynum == K_R1_BUTTON )
-			binding = "+attack2";
-		else if( keynames[i].keynum == K_RTRIGGER || keynames[i].keynum == K_R2_BUTTON )
-			binding = "+attack";
+		binding = Key_DefaultGamepadBinding( keynames[i].keynum, binding );
 #endif
 		Key_SetBinding( keynames[i].keynum, binding );
 	}
@@ -644,6 +691,9 @@ void Key_Init( void )
 		Key_SetBinding( keynames[i].keynum, keynames[i].binding );
 
 	Cvar_RegisterVariable( &key_rotate );
+#if XASH_PS4
+	Cvar_RegisterVariable( &key_padlayout );
+#endif
 
 }
 
