@@ -60,6 +60,11 @@ Platform_SetMousePos
 */
 void GAME_EXPORT Platform_SetMousePos( int x, int y )
 {
+#if XASH_PS4
+	// no mouse, and with the GNM renderer host.hWnd isn't an SDL window: warping
+	// the mouse made SDL send focus events to it and crashed on loading a save
+	return;
+#endif
 	SDL_WarpMouseInWindow( host.hWnd, x, y );
 }
 
@@ -281,6 +286,10 @@ void Platform_SetCursorType( VGUI_DefaultCursor type )
 	host.mouse_visible = visible;
 	VGui_UpdateInternalCursorState( type );
 
+#if XASH_PS4
+	return; // no mouse cursor, see Platform_SetMousePos
+#endif
+
 	if( host.mouse_visible )
 	{
 		if( cursors.initialized )
@@ -316,6 +325,9 @@ Platform_GetMouseGrab
 */
 qboolean Platform_GetMouseGrab( void )
 {
+#if XASH_PS4
+	return false; // see Platform_SetMousePos
+#endif
 	return SDL_GetWindowGrab( host.hWnd );
 }
 
@@ -326,6 +338,9 @@ Platform_SetMouseGrab
 */
 void Platform_SetMouseGrab( qboolean enable )
 {
+#if XASH_PS4
+	return; // see Platform_SetMousePos
+#endif
 	SDL_SetWindowGrab( host.hWnd, enable );
 }
 
