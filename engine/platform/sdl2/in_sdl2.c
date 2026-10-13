@@ -180,7 +180,7 @@ int Platform_TranslateKeyLayout( int keynum )
 	return keynum;
 }
 
-#if !XASH_PSVITA
+#if !XASH_PSVITA && !XASH_PS4 // PS4 opens the system keyboard, see platform/ps4/in_ps4.c
 
 /*
 =============
@@ -210,7 +210,7 @@ void Platform_EnableTextInput( qboolean enable, int x, int y, int w, int h )
 	SDL_StartTextInput();
 }
 
-#endif // !XASH_PSVITA
+#endif // !XASH_PSVITA && !XASH_PS4
 
 /*
 ========================

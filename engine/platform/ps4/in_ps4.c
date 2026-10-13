@@ -22,8 +22,12 @@ and drops one of the triggers, so DualShock 4 is read directly through libScePad
 #include "input.h"
 #include "keydefs.h"
 #include "client.h"
+#include "vgui_draw.h"
 #include <orbis/Pad.h>
 #include <orbis/UserService.h>
+#include <orbis/CommonDialog.h>
+#include <orbis/ImeDialog.h>
+#include <orbis/Sysmodule.h>
 
 #ifndef ORBIS_PAD_PORT_TYPE_STANDARD
 #define ORBIS_PAD_PORT_TYPE_STANDARD 0
@@ -59,6 +63,192 @@ static struct
 	float    vibrate_until;
 	qboolean vibrating;
 } ps4pad = { -1 };
+
+/*
+==============================================================================
+
+System keyboard
+
+When the engine wants text (console, chat, menu fields) Cross opens the system
+keyboard dialog instead of going to the game. The dialog works with UTF-16,
+our wchar_t is 32 bits, so buffers are uint16_t.
+
+==============================================================================
+*/
+#define IME_MAX_TEXT 255
+
+static struct
+{
+	qboolean wanted;       // engine has text input enabled
+	qboolean open;         // dialog is running
+	qboolean initialized;  // module loaded, common dialog initialized
+	qboolean swallow_cross; // Cross opened the dialog, its release isn't a key event
+	uint16_t text[IME_MAX_TEXT + 1];
+} ps4ime;
+
+static void PS4_SendAxis( engineAxis_t axis, short value );
+
+static qboolean PS4_IME_Init( void )
+{
+	int ret;
+
+	if( ps4ime.initialized )
+		return true;
+
+	if(( ret = sceSysmoduleLoadModule( ORBIS_SYSMODULE_IME_DIALOG )) < 0 )
+	{
+		Con_Printf( S_ERROR "IME dialog module: 0x%08x\n", ret );
+		return false;
+	}
+
+	// fails if somebody initialized it already, that's fine
+	sceCommonDialogInitialize();
+	ps4ime.initialized = true;
+	return true;
+}
+
+static void PS4_IME_Open( void )
+{
+	static const uint16_t title[] = { 'X', 'a', 's', 'h', '3', 'D', 0 };
+	OrbisImeDialogSetting param;
+	int32_t user = -1;
+	int ret;
+
+	if( !PS4_IME_Init( ))
+		return;
+
+	sceUserServiceGetInitialUser( &user );
+	memset( ps4ime.text, 0, sizeof( ps4ime.text ));
+	memset( &param, 0, sizeof( param ));
+	param.userId = user;
+	param.type = ORBIS_TYPE_DEFAULT;
+	param.supportedLanguages = 0; // all
+	param.enterLabel = ORBIS_BUTTON_LABEL_DEFAULT;
+	param.maxTextLength = IME_MAX_TEXT;
+	param.inputTextBuffer = (wchar_t *)ps4ime.text;
+	param.posx = 1920.0f / 2.0f;
+	param.posy = 1080.0f / 2.0f;
+	param.horizontalAlignment = ORBIS_H_CENTER;
+	param.verticalAlignment = ORBIS_V_CENTER;
+	param.title = (const wchar_t *)title;
+
+	if(( ret = sceImeDialogInit( &param, NULL )) < 0 )
+	{
+		Con_Printf( S_ERROR "sceImeDialogInit failed: 0x%08x\n", ret );
+		return;
+	}
+
+	ps4ime.open = true;
+
+	// nothing reaches the game while the dialog takes the gamepad
+	PS4_SendAxis( JOY_AXIS_SIDE, 0 );
+	PS4_SendAxis( JOY_AXIS_FWD, 0 );
+	PS4_SendAxis( JOY_AXIS_YAW, 0 );
+	PS4_SendAxis( JOY_AXIS_PITCH, 0 );
+	PS4_SendAxis( JOY_AXIS_LT, 0 );
+	PS4_SendAxis( JOY_AXIS_RT, 0 );
+}
+
+static size_t PS4_IME_ToUtf8( char *out, size_t size, const uint16_t *in )
+{
+	size_t len = 0;
+
+	while( *in && len + 5 < size )
+	{
+		uint32_t c = *in++;
+
+		if( c >= 0xd800 && c < 0xdc00 && *in >= 0xdc00 && *in < 0xe000 )
+			c = 0x10000 + (( c - 0xd800 ) << 10 ) + ( *in++ - 0xdc00 );
+
+		if( c < 0x80 )
+			out[len++] = c;
+		else if( c < 0x800 )
+		{
+			out[len++] = 0xc0 | ( c >> 6 );
+			out[len++] = 0x80 | ( c & 0x3f );
+		}
+		else if( c < 0x10000 )
+		{
+			out[len++] = 0xe0 | ( c >> 12 );
+			out[len++] = 0x80 | (( c >> 6 ) & 0x3f );
+			out[len++] = 0x80 | ( c & 0x3f );
+		}
+		else
+		{
+			out[len++] = 0xf0 | ( c >> 18 );
+			out[len++] = 0x80 | (( c >> 12 ) & 0x3f );
+			out[len++] = 0x80 | (( c >> 6 ) & 0x3f );
+			out[len++] = 0x80 | ( c & 0x3f );
+		}
+	}
+
+	out[len] = 0;
+	return len;
+}
+
+static void PS4_IME_KeyPress( int key )
+{
+	Key_Event( key, true );
+	Key_Event( key, false );
+}
+
+// typed text goes in like text input events of SDL; menu fields are replaced
+// with it, console and chat get it appended and sent
+static void PS4_IME_Deliver( void )
+{
+	char text[IME_MAX_TEXT * 4 + 1];
+	const qboolean menu = cls.key_dest == key_menu;
+	const char *p;
+	int i;
+
+	PS4_IME_ToUtf8( text, sizeof( text ), ps4ime.text );
+
+	if( !text[0] && !menu )
+		return;
+
+	if( menu )
+	{
+		for( i = 0; i < 256; i++ )
+			PS4_IME_KeyPress( K_BACKSPACE );
+	}
+
+	VGui_ReportTextInput( text );
+
+	for( p = text; *p; p++ )
+	{
+		int ch = (byte)*p;
+
+		if( !cls.accept_utf8 )
+			ch = Con_UtfProcessCharForce( ch );
+
+		if( ch )
+			CL_CharEvent( ch );
+	}
+
+	if( !menu )
+		PS4_IME_KeyPress( K_ENTER );
+}
+
+static void PS4_IME_Update( void )
+{
+	OrbisDialogResult result;
+
+	if( sceImeDialogGetStatus() == ORBIS_DIALOG_STATUS_RUNNING )
+		return;
+
+	memset( &result, 0, sizeof( result ));
+	sceImeDialogGetResult( &result );
+	sceImeDialogTerm();
+	ps4ime.open = false;
+
+	if( result.endstatus == ORBIS_DIALOG_OK )
+		PS4_IME_Deliver();
+}
+
+void Platform_EnableTextInput( qboolean enable, int x, int y, int w, int h )
+{
+	ps4ime.wanted = enable;
+}
 
 static short PS4_StickToAxis( uint8_t value )
 {
@@ -107,7 +297,33 @@ void PS4_InputUpdate( void )
 	if( scePadReadState( ps4pad.handle, &data ) < 0 || !data.connected )
 		return;
 
+	// the system keyboard has the gamepad, state is only tracked
+	if( ps4ime.open )
+	{
+		PS4_IME_Update();
+		ps4pad.buttons = data.buttons;
+		// Cross may have been released while the dialog was open
+		if( !ps4ime.open )
+			ps4ime.swallow_cross = FBitSet( data.buttons, ORBIS_PAD_BUTTON_CROSS ) ? true : false;
+		return;
+	}
+
 	uint32_t changed = data.buttons ^ ps4pad.buttons;
+
+	// Cross opens the system keyboard when the engine waits for text
+	if( FBitSet( changed & data.buttons, ORBIS_PAD_BUTTON_CROSS ) && ps4ime.wanted && host.textmode )
+	{
+		ps4ime.swallow_cross = true;
+		ps4pad.buttons = data.buttons;
+		PS4_IME_Open();
+		return;
+	}
+
+	if( ps4ime.swallow_cross && FBitSet( changed, ORBIS_PAD_BUTTON_CROSS ) && !FBitSet( data.buttons, ORBIS_PAD_BUTTON_CROSS ))
+	{
+		ps4ime.swallow_cross = false;
+		ClearBits( changed, ORBIS_PAD_BUTTON_CROSS );
+	}
 
 	for( size_t i = 0; changed && i < ARRAYSIZE( ps4_buttons ); i++ )
 	{
