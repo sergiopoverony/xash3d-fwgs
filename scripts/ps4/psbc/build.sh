@@ -9,7 +9,9 @@
 # psbc-ps4.patch:
 #   - builds descriptor set 0 layout from shader resources, without it radv turns
 #     every uniform buffer or texture access into a load through a null descriptor;
-#     layout rule is described at psbc_build_set_layout()
+#     binding N is at offset N * 64, see psbc_build_set_layout()
+#   - assigns VS parameter exports and fragment shader input attribute indices,
+#     radv does both when linking a pipeline
 #   - GFX7/GFX8 register limits as in Mesa, old ones failed register allocation
 #   - no NEON blake3 source on x86
 set -e

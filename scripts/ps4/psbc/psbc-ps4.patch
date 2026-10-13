@@ -13,7 +13,7 @@ index 21c97d3..ed6b0cf 100644
  # C11 threads compat (POSIX implementation)
  C11_THREADS_SRCS = src/c11/impl/threads_posix.c src/c11/impl/time.c
 diff --git a/libpsbc/psbc_compile.c b/libpsbc/psbc_compile.c
-index bacbc6a..b91bdfe 100644
+index bacbc6a..1b011b5 100644
 --- a/libpsbc/psbc_compile.c
 +++ b/libpsbc/psbc_compile.c
 @@ -32,6 +32,7 @@
@@ -70,7 +70,7 @@ index bacbc6a..b91bdfe 100644
          ac_info->wave64_vgpr_alloc_granularity = 4;
      }
  }
-@@ -928,6 +933,161 @@ static void setup_target(PsbcTarget target,
+@@ -928,6 +933,168 @@ static void setup_target(PsbcTarget target,
      }
  }
  
@@ -81,8 +81,10 @@ index bacbc6a..b91bdfe 100644
 + * layout of descriptor set 0 from the shader's own resource variables with
 + * a fixed rule the runtime can reproduce:
 + *
-+ *   - bindings are placed in increasing binding number order;
-+ *   - every binding starts at a 16 byte aligned offset;
++ *   - binding N starts at offset N * 64, whatever other bindings the shader
++ *     declares or uses: unused resources are removed while SPIR-V is parsed,
++ *     and variants of one shader must keep the same offsets;
++ *   - only the last binding can be an array longer than 64 bytes;
 + *   - descriptor sizes (per array element):
 + *       uniform/storage buffer, texel buffer   16 (V#)
 + *       sampled/storage image                  32 (T#)
@@ -93,7 +95,7 @@ index bacbc6a..b91bdfe 100644
 + * PTR_INDIRECTRESOURCETABLE input usage slot (address32_hi is 0, so the
 + * table must be below 4 GB). Only descriptor set 0 is supported.
 + */
-+#define PSBC_DESC_ALIGN 16
++#define PSBC_BINDING_STRIDE 64
 +#define PSBC_COMBINED_SAMPLER_OFFSET 32
 +
 +static VkDescriptorType psbc_var_desc_type(const nir_variable* var) {
@@ -217,9 +219,14 @@ index bacbc6a..b91bdfe 100644
 +        if (!b->array_size)
 +            continue;
 +
-+        offset = align(offset, PSBC_DESC_ALIGN);
-+        b->offset = offset;
-+        offset += b->size * b->array_size;
++        if (offset > (uint32_t)i * PSBC_BINDING_STRIDE) {
++            fprintf(stderr, "psbc: binding %d overlaps the previous one, only the last binding can be a long array\n", i);
++            free(layout);
++            *res = PSBC_RESULT_COMPILE_NIR;
++            return NULL;
++        }
++        b->offset = i * PSBC_BINDING_STRIDE;
++        offset = b->offset + b->size * b->array_size;
 +        fprintf(stderr, "psbc: set 0 binding %d: %s x%u at offset %u, %u bytes each\n",
 +                i, psbc_desc_name(b->type), b->array_size, b->offset, b->size);
 +    }
@@ -232,7 +239,7 @@ index bacbc6a..b91bdfe 100644
  /* === Main compilation function === */
  
  PsbcResult psbc_compile_shader(
-@@ -966,6 +1126,10 @@ PsbcResult psbc_compile_shader(
+@@ -966,6 +1133,10 @@ PsbcResult psbc_compile_shader(
      struct radv_compiler_info compiler_info = {0};
      compiler_info.ac = &ac_info;
      compiler_info.hw.address32_hi = 0;
@@ -243,11 +250,13 @@ index bacbc6a..b91bdfe 100644
      compiler_info.key.ge_wave_size = 64;
      compiler_info.key.ps_wave_size = (gfxlevel >= GFX10_3) ? 32 : 64;
      compiler_info.key.cs_wave_size = (gfxlevel >= GFX10_3) ? 32 : 64;
-@@ -1022,17 +1186,37 @@ PsbcResult psbc_compile_shader(
-     /* Shader info + args + postprocess */
-     radv_nir_shader_info_init(stage.stage, stage.next_stage, &stage.info);
+@@ -1012,6 +1183,17 @@ PsbcResult psbc_compile_shader(
+         return PSBC_RESULT_COMPILE_NIR;
+     }
  
--    struct radv_shader_layout layout = {0};
++    /* Descriptor set layout comes from every declared resource, before the
++     * optimizer removes unused ones: the runtime fills tables by the declared
++     * bindings, so offsets must not depend on what a variant happens to use */
 +    PsbcResult layoutres;
 +    struct radv_descriptor_set_layout* setlayout =
 +        psbc_build_set_layout(nir, &layoutres);
@@ -255,6 +264,24 @@ index bacbc6a..b91bdfe 100644
 +        psbc_shutdown();
 +        return layoutres;
 +    }
++
+     /* Optimize NIR */
+     radv_optimize_nir(nir, !opts->optimise);
+ 
+@@ -1019,20 +1201,39 @@ PsbcResult psbc_compile_shader(
+     nir_shader_gather_info(nir, nir_shader_get_entrypoint(nir));
+     radv_nir_lower_io(nir);
+ 
++    /* Fragment shader inputs get attribute indices in location order, the
++     * same order as VS parameter exports. radv does it when linking; without
++     * it every input has base 0 and all of them read attribute 0. */
++    if (mesa_stage == MESA_SHADER_FRAGMENT)
++        NIR_PASS(_, nir, nir_recompute_io_bases, nir_var_shader_in);
++
+     /* Shader info + args + postprocess */
+     radv_nir_shader_info_init(stage.stage, stage.next_stage, &stage.info);
+ 
+-    struct radv_shader_layout layout = {0};
 +    if (setlayout) {
 +        stage.layout.num_sets = 1;
 +        stage.layout.set[0].layout = setlayout;
@@ -283,7 +310,7 @@ index bacbc6a..b91bdfe 100644
      /* Determine previous stage for shader args declaration.
       * HS/GS need previous_stage=VERTEX so that the merged-pipeline args
       * (prolog_inputs, vertex_buffers, etc.) are declared for the NIR
-@@ -1090,6 +1274,7 @@ PsbcResult psbc_compile_shader(
+@@ -1090,6 +1291,7 @@ PsbcResult psbc_compile_shader(
      );
  
      if (!binary) {
@@ -291,7 +318,7 @@ index bacbc6a..b91bdfe 100644
          psbc_shutdown();
          return PSBC_RESULT_COMPILE_ACO;
      }
-@@ -1127,6 +1312,7 @@ PsbcResult psbc_compile_shader(
+@@ -1127,6 +1329,7 @@ PsbcResult psbc_compile_shader(
      out->size = output_size;
  
      free(binary);

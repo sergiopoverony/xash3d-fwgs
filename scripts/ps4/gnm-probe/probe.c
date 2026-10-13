@@ -579,9 +579,9 @@ static bool init_quad( scene_t *s, MemoryAllocator *garlic )
 	return true;
 }
 
-// descriptor set 0 layouts made by patched psbc (scripts/ps4/psbc):
-//   quad.vert: binding 0 uniform buffer at 0, binding 1 storage buffer at 16
-//   quad.frag: binding 0 uniform buffer at 0, binding 1 combined image sampler at 16 (T#) and 48 (S#)
+// descriptor set 0 layouts made by patched psbc (scripts/ps4/psbc), binding N at N * 64:
+//   quad.vert: binding 0 uniform buffer at 0, binding 1 storage buffer at 64
+//   quad.frag: binding 0 uniform buffer at 0, binding 1 combined image sampler at 64 (T#) and 96 (S#)
 static bool emit_quad( scene_t *s, GnmCommandBuffer *cmd, int frame )
 {
 	// moves left and right, color pulses, so per-frame uniform updates are visible
@@ -590,8 +590,8 @@ static bool emit_quad( scene_t *s, GnmCommandBuffer *cmd, int frame )
 	const float aspect = (float)s->display.screenw / (float)s->display.screenh;
 	float *vsdata = lowpool_alloc( &s->low, 16, 16 );
 	float *psdata = lowpool_alloc( &s->low, 16, 16 );
-	uint8_t *vstable = lowpool_alloc( &s->low, 32, 16 );
-	uint8_t *pstable = lowpool_alloc( &s->low, 64, 16 );
+	uint8_t *vstable = lowpool_alloc( &s->low, 128, 16 );
+	uint8_t *pstable = lowpool_alloc( &s->low, 128, 16 );
 	GnmBuffer b;
 
 	if( !vsdata || !psdata || !vstable || !pstable )
@@ -610,12 +610,12 @@ static bool emit_quad( scene_t *s, GnmCommandBuffer *cmd, int frame )
 	b = raw_buffer( vsdata, 16 );
 	memcpy( vstable + 0, &b, sizeof( b ));
 	b = raw_buffer( s->verts, 6 * 16 );
-	memcpy( vstable + 16, &b, sizeof( b ));
+	memcpy( vstable + 64, &b, sizeof( b ));
 
 	b = raw_buffer( psdata, 16 );
 	memcpy( pstable + 0, &b, sizeof( b ));
-	memcpy( pstable + 16, &s->tex, sizeof( s->tex ));
-	memcpy( pstable + 48, &s->samp, sizeof( s->samp ));
+	memcpy( pstable + 64, &s->tex, sizeof( s->tex ));
+	memcpy( pstable + 96, &s->samp, sizeof( s->samp ));
 
 	gnmDrawCmdSetVsShader( cmd, &s->quadvs->registers, 0 );
 	gnmDrawCmdSetPsShader( cmd, &s->quadps->registers );

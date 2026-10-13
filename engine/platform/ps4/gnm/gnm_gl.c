@@ -168,6 +168,12 @@ typedef intptr_t GLsizeiptr;
 
 #define MAX_TEXTURE_UNITS  2
 #define VS_BASE_VERTEX_SGPR 2 // see set_shaders
+
+// descriptor tables: binding N of a shader is at offset N * 64, see psbc_build_set_layout
+// in scripts/ps4/psbc/psbc-ps4.patch; bindings are in shaders/gl2.*.glsl
+#define BINDING( n ) (( n ) * 64 )
+#define VS_TABLE_SIZE BINDING( 1 + SEM_COUNT ) // uniforms, then one buffer per attribute
+#define PS_TABLE_SIZE BINDING( 1 + MAX_TEXTURE_UNITS ) // uniforms, then textures
 #define MAX_ATTRIBS        8
 #define MAX_VERTS          ( 1024 * 1024 )
 
@@ -1816,7 +1822,7 @@ static void draw( GLenum mode, GLint first, GLsizei count, bool indexed, GLenum 
 			return;
 		transient += (( attrs[k].bytes + 15 ) & ~15u ) + 16;
 	}
-	tables = 16 + 16 * numsems + 16 + 48 * 2;
+	tables = VS_TABLE_SIZE + PS_TABLE_SIZE + 32;
 
 	cmd = gnm_dev_reserve( 1024, tables, transient );
 
@@ -1845,7 +1851,7 @@ static void draw( GLenum mode, GLint first, GLsizei count, bool indexed, GLenum 
 	// vertex shader: uniforms and one buffer per attribute
 	{
 		uint8_t *vsu = gnm_dev_alloc_transient( 144, 16 );
-		uint8_t *table = gnm_dev_alloc_table( 16 + 16 * numsems );
+		uint8_t *table = gnm_dev_alloc_table( VS_TABLE_SIZE );
 		int32_t *ai = (int32_t *)( vsu + 64 );
 		GnmBuffer b;
 
@@ -1868,7 +1874,7 @@ static void draw( GLenum mode, GLint first, GLsizei count, bool indexed, GLenum 
 			b = sceGnmCreateConstBuffer( data, attrs[k].bytes + 16 );
 			b.stride = 0;
 			b.numrecords = attrs[k].bytes + 16;
-			memcpy( table + 16 + 16 * k, &b, 16 );
+			memcpy( table + BINDING( 1 + sem ), &b, 16 );
 		}
 		// misc.x - base vertex, data starts at vmin and indices are rebased
 
@@ -1882,9 +1888,7 @@ static void draw( GLenum mode, GLint first, GLsizei count, bool indexed, GLenum 
 	// pixel shader: uniforms and textures
 	{
 		float *psu = gnm_dev_alloc_transient( 48, 16 );
-		int ntex = (( psbits & GNM_GL2_TEXCOORD0 ) ? 1 : 0 ) + (( psbits & GNM_GL2_TEXCOORD1 ) ? 1 : 0 );
-		uint8_t *table = gnm_dev_alloc_table( 16 + 48 * ntex );
-		uint8_t *slot = table + 16;
+		uint8_t *table = gnm_dev_alloc_table( PS_TABLE_SIZE );
 		GnmBuffer b;
 		int u;
 
@@ -1908,9 +1912,9 @@ static void draw( GLenum mode, GLint first, GLsizei count, bool indexed, GLenum 
 
 			t = usable_texture( u );
 			s = make_sampler( t );
-			memcpy( slot, &t->desc, 32 );
-			memcpy( slot + 32, &s, 16 );
-			slot += 48;
+			// combined image sampler: T# and S# at +32
+			memcpy( table + BINDING( 1 + u ), &t->desc, 32 );
+			memcpy( table + BINDING( 1 + u ) + 32, &s, 16 );
 		}
 
 		gnm_dev_set_user_sgpr( cmd, true, ps->table_reg, (uint32_t)(uintptr_t)table );
