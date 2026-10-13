@@ -16,6 +16,17 @@ scripts/ps4/build.sh 192.168.0.10 # same, and upload to the console FTP (GoldHEN
 `scripts/ps4/apply-patches.sh` adds PS4 platform to `library_suffix` and `mainui` submodules,
 until it's merged to their repositories.
 
+`build.sh` also fetches [opengnm](https://github.com/PS4-OpenGNM/opengnm) at a fixed commit
+into `3rdparty/opengnm`, it's built into the engine for the GPU renderer.
+
+Shaders of the GPU renderer are compiled ahead of time and kept in
+`engine/platform/ps4/gnm/gnm_shaders.c`. After changing `engine/platform/ps4/gnm/shaders`:
+
+```
+scripts/ps4/psbc/build.sh          # host glslang and opengnm-psbc with our patch, prints their paths
+GLSLANG=... PSBC=... scripts/ps4/gnm/compile-shaders.sh
+```
+
 ## Running
 
 * Game data goes to `/data/xash/valve` (or `/mnt/usbN/xash/valve` on USB storage).
@@ -30,10 +41,42 @@ until it's merged to their repositories.
 
 Half-Life runs: menu, gameplay, sound, DualShock 4, level changes, save/load, exit.
 
-* Software renderer only: Piglet (system GLES2) can't compile shaders at runtime.
-  Frame is rendered at configured resolution (1280x720 by default) and scaled to the screen.
-* DualShock 4 is read through libScePad directly.
+* GPU renderer by default: `gles3compat` (ref_gl with gl2_shim) on top of a small
+  OpenGL ES 2 subset written over GNM, see below. 1920x1080, 60 FPS with vsync,
+  a frame takes about 1-3 ms of CPU and 1-2 ms of GPU time.
+* Software renderer with `-ref soft`: rendered at configured resolution
+  (1280x720 by default) and scaled to the screen.
+* DualShock 4 is read through libScePad directly, default layout is in
+  `Key_SetDefaultGamepadBindings` (applied once over older configs, `resetkeys` restores it).
 * Savegames store function offsets instead of names (no `dladdr`).
+
+## GPU renderer
+
+PS4 has no OpenGL driver usable by homebrew: Piglet (system GLES2) can't compile shaders
+at runtime. `engine/platform/ps4/gnm` implements what gl2_shim needs from OpenGL ES 2
+directly over GNM with opengnm:
+
+* `gnm_dev.c`: GPU memory, command buffers, submits, display and flips.
+  Submits are synchronous, the GPU is far from being the bottleneck.
+* `gnm_gl.c`: GL state, textures (linear, with mipmaps), buffers, draws, `glReadPixels`.
+  gl2_shim programs are mapped to precompiled shader variants by their defines.
+* Shaders are GLSL compiled with glslang and opengnm-psbc with `scripts/ps4/psbc/psbc-ps4.patch`.
+
+Things that were checked on the console (firmware 13.02) and are easy to break:
+
+* Firmware embedded shaders of opengnm refer to old firmware addresses, own shaders are used.
+* psbc passes the descriptor table address in one 32-bit user SGPR, tables are kept below 4 GB.
+* psbc has no vertex fetch, vertex shaders read attributes from raw buffers by vertex index.
+* Indexed draws use our own `DRAW_INDEX_2` packet, opengnm's goes through a firmware helper.
+* Linear textures without mipmaps need rows aligned to 64 texels, mipmapped textures use
+  opengnm's layout.
+
+Command line options (`xash3d.cmdline`):
+
+* `-gnmdebug [1|2|3]`: log submits and texture uploads, every draw, submit after every draw.
+* `-gnmstats`: frame timing in the log every 300 frames.
+* `-gnmmips 0|1|2`: no mipmaps, power of two textures only, all textures (default).
+* `-gnmnoflip`: don't swap front face winding (only for debugging culling).
 
 ## Implementation notes
 
@@ -53,3 +96,5 @@ and linked into every image by `scripts/waifulib/ps4.py`:
 * `stdout.txt` survives crashes. Crashes print registers and stack as `module+offset`,
   resolve them with `scripts/ps4/symbolize.sh <console IP> [hlsdk build dir]`.
 * `-ps4watchdog` in `xash3d.cmdline` dumps engine thread state if nothing is logged for 10 seconds.
+* GPU hangs are detected (no submit finishes in 3 seconds): `GPU HANG` in the log names
+  the last draw (with `-gnmdebug`), rendering stops but the game keeps running.

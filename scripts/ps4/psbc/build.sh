@@ -4,7 +4,7 @@
 # shaders are kept in the repository.
 #
 # Usage: scripts/ps4/psbc/build.sh [output directory]
-#   Prints paths to use as PSBC and GLSLANG for gnm-probe/compile-shaders.sh.
+#   Prints paths to use as PSBC and GLSLANG for scripts/ps4/gnm/compile-shaders.sh.
 #
 # psbc-ps4.patch:
 #   - builds descriptor set 0 layout from shader resources, without it radv turns
