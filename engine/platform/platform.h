@@ -138,6 +138,7 @@ int PS4_GetArgv( int in_argc, char **in_argv, char ***out_argv );
 int PS4_RunOnBigStack( int ( *func )( void *arg ), void *arg );
 void PS4_Log( const char *fmt, ... ) FORMAT_CHECK( 1 );
 void PS4_InputUpdate( void );
+qboolean PS4_PackageLibraryExists( const char *name );
 void PS4_FramePresented( void );
 void PS4_AllowHideSplash( void );
 #endif
@@ -260,6 +261,11 @@ static inline qboolean Platform_LibraryExists( const char *name, qboolean gamedi
 	// when libs come from a separate APK (cs16client, tf15client, …) we can't see them
 	// from the VFS; trust the launcher.
 	if( !COM_StringEmptyOrNULL( getenv( "XASH3D_GAMELIBDIR" )))
+		return true;
+#endif
+#if XASH_PS4
+	// game libraries can be shipped in the package, see PS4_dlopen
+	if( PS4_PackageLibraryExists( name ))
 		return true;
 #endif
 	// FIXME: use FS_FindLibrary

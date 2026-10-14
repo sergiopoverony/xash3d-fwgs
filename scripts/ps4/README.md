@@ -30,8 +30,10 @@ GLSLANG=... PSBC=... scripts/ps4/gnm/compile-shaders.sh
 ## Running
 
 * Game data goes to `/data/xash/valve` (or `/mnt/usbN/xash/valve` on USB storage).
-* Game libraries built from [hlsdk-portable](https://github.com/FWGS/hlsdk-portable) go to
-  `valve/cl_dlls/client_ps4_amd64.prx` and `valve/dlls/<name>_ps4_amd64.prx`.
+* Game libraries built from [hlsdk-portable](https://github.com/FWGS/hlsdk-portable)
+  (its `scripts/ps4/build.sh`) are put into the package by `package.sh`, it looks for them in
+  `../hlsdk-portable/build/ps4/valve` (or `HLSDK_PS4_BUILD`), so build hlsdk-portable first.
+  Libraries in `valve/cl_dlls` and `valve/dlls` on the console override packaged ones.
 * `extras.pk3` is copied from the package to `/data/xash/valve` on start.
 * Extra command line arguments can be put into `/data/xash/xash3d.cmdline`,
   by default `-log -dev 2` is used.

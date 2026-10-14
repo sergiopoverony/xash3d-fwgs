@@ -163,6 +163,19 @@ static qboolean PS4_DirExists( const char *path )
 	return stat( path, &st ) == 0 && S_ISDIR( st.st_mode );
 }
 
+// modules shipped in the package root: engine modules and, when packaged
+// together with the engine, game libraries (only their file name counts)
+qboolean PS4_PackageLibraryExists( const char *name )
+{
+	char path[512];
+
+	if( !name || !name[0] )
+		return false;
+
+	Q_snprintf( path, sizeof( path ), "%s/%s", PS4_APP_DIR, COM_FileWithoutPath( name ));
+	return PS4_FileExists( path );
+}
+
 void *PS4_dlopen( const char *name, int flags )
 {
 	char path[512];
@@ -182,7 +195,9 @@ void *PS4_dlopen( const char *name, int flags )
 	}
 	else
 	{
-		// engine modules (filesystem, menu, renderers) live in the package root
+		// engine modules (filesystem, menu, renderers) live in the package root, game
+		// libraries too when they are packaged; libraries in the game directory are
+		// found by the engine before it gets here, so they override packaged ones
 		const char *base = COM_FileWithoutPath( name );
 
 		Q_snprintf( path, sizeof( path ), "%s/%s", PS4_APP_DIR, base );

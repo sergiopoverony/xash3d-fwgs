@@ -61,6 +61,20 @@ if [ $found_ref = 0 ]; then
 fi
 
 cp "$BUILD/3rdparty/extras/extras.pk3" "$STAGE/valve/extras.pk3"
+
+# Half-Life game libraries from hlsdk-portable (its scripts/ps4/build.sh), so the package
+# runs with just the game data copied to the console. Libraries uploaded to
+# /data/xash/valve/{cl_dlls,dlls} are used instead of these when present.
+GAMELIBS=${HLSDK_PS4_BUILD:-$ROOT/../hlsdk-portable/build/ps4/valve}
+if ls "$GAMELIBS"/cl_dlls/*.prx "$GAMELIBS"/dlls/*.prx > /dev/null 2>&1; then
+	for f in "$GAMELIBS"/cl_dlls/*.prx "$GAMELIBS"/dlls/*.prx; do
+		cp "$f" "$STAGE/"
+		echo "  $(basename "$f") (game library)"
+	done
+else
+	echo "  WARNING: no game libraries in $GAMELIBS, build hlsdk-portable first or set HLSDK_PS4_BUILD;"
+	echo "  the package will need them in /data/xash/valve/cl_dlls and dlls"
+fi
 # icon0.png - 512x512 icon, pic0.png/pic1.png - 1920x1080 images, the system shows
 # one of them as startup splash until the engine hides it after initialization
 cp "$ROOT/engine/platform/ps4/sce_sys/icon0.png" "$ROOT/engine/platform/ps4/sce_sys/pic0.png" "$STAGE/sce_sys/"
