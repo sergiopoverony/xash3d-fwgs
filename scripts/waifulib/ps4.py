@@ -24,7 +24,7 @@ from waflib import TaskGen
 PS4_SYSTEM_LIBS = ['-lSceNet', '-lkernel']
 
 # file functions redirected to working directory emulation, see engine/platform/ps4/compat/ps4_cwd.c
-PS4_WRAPPED_FUNCS = ['open', 'fopen', 'stat', 'lstat', 'fstat', 'opendir', 'mkdir', 'rename', 'remove',
+PS4_WRAPPED_FUNCS = ['open', 'fopen', 'stat', 'lstat', 'fstat', 'opendir', 'readdir', 'mkdir', 'rename', 'remove',
 	'unlink', 'rmdir', 'access', 'chdir', 'getcwd', 'realpath', 'fcntl',
 	# memory allocation goes to the process heap in eboot.bin, see ps4_malloc.c
 	'malloc', 'free', 'calloc', 'realloc', 'memalign', 'aligned_alloc', 'valloc', 'posix_memalign',

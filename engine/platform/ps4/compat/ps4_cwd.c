@@ -46,6 +46,7 @@ int __real_stat( const char *path, struct stat *st );
 int __real_lstat( const char *path, struct stat *st );
 int __real_fstat( int fd, struct stat *st );
 DIR *__real_opendir( const char *path );
+struct dirent *__real_readdir( DIR *dir );
 int __real_mkdir( const char *path, mode_t mode );
 int __real_rename( const char *oldpath, const char *newpath );
 int __real_remove( const char *path );
@@ -279,6 +280,27 @@ DIR *__wrap_opendir( const char *path )
 {
 	char buf[PS4_PATH_MAX];
 	return __real_opendir( PS4_AbsPath( path, buf, sizeof( buf )));
+}
+
+// The kernel returns raw directory records, unused ones (left by deleted files)
+// have inode 0. FreeBSD libc skips them in readdir, musl doesn't, so deleted
+// files were listed: the engine then tried to use a save file that was gone and
+// loading autosaves failed. The inode is the first field of struct dirent in
+// both FreeBSD and musl layouts, it's checked there to not depend on its name.
+struct dirent *__wrap_readdir( DIR *dir )
+{
+	struct dirent *ent;
+
+	while(( ent = __real_readdir( dir )) != NULL )
+	{
+		uint32_t ino;
+
+		memcpy( &ino, ent, sizeof( ino ));
+		if( ino != 0 )
+			break;
+	}
+
+	return ent;
 }
 
 int __wrap_mkdir( const char *path, mode_t mode )
