@@ -481,10 +481,11 @@ int PS4_GetArgv( int in_argc, char **in_argv, char ***out_argv )
 	}
 	else
 	{
-		// write verbose log by default, so it's always possible to see what went wrong
+		// log is always written, so it's possible to see what went wrong; console is
+		// available, but without -dev its messages don't cover the top of the screen,
+		// "-log -dev 2" in xash3d.cmdline gives verbose log and messages on screen
 		ps4_argv[argc++] = (char *)"-log";
-		ps4_argv[argc++] = (char *)"-dev";
-		ps4_argv[argc++] = (char *)"2";
+		ps4_argv[argc++] = (char *)"-console";
 	}
 
 	ps4_argv[argc] = NULL;

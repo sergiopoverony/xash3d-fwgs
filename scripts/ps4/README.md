@@ -36,7 +36,8 @@ GLSLANG=... PSBC=... scripts/ps4/gnm/compile-shaders.sh
   Libraries in `valve/cl_dlls` and `valve/dlls` on the console override packaged ones.
 * `extras.pk3` is copied from the package to `/data/xash/valve` on start.
 * Extra command line arguments can be put into `/data/xash/xash3d.cmdline`,
-  by default `-log -dev 2` is used.
+  by default `-log -console` is used. `-log -dev 2` gives a verbose log, but developer
+  messages are also shown in the top left corner of the screen.
 * Output is written to `/data/xash/stdout.txt` and `/data/xash/engine.log`.
 
 ## Status
