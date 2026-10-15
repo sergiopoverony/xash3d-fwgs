@@ -94,7 +94,7 @@ static struct
 	uint16_t text[IME_MAX_TEXT + 1];
 } ps4ime;
 
-static CVAR_DEFINE_AUTO( ime_system_language, "0", FCVAR_ARCHIVE, "system keyboard also offers the system language; the keyboard then starts with it, not English" );
+static CVAR_DEFINE_AUTO( ime_system_language, "1", FCVAR_ARCHIVE, "system keyboard starts with the language of the console and has English second, 0 - English only" );
 
 // IME languages (SceImeLanguage)
 #define IME_LANGUAGE_DANISH         0x00000001ULL
