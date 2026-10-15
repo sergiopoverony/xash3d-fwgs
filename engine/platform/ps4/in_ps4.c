@@ -94,7 +94,7 @@ static struct
 	uint16_t text[IME_MAX_TEXT + 1];
 } ps4ime;
 
-static CVAR_DEFINE_AUTO( ime_system_language, "1", FCVAR_ARCHIVE, "system keyboard starts with the language of the console and has English second, 0 - English only" );
+static CVAR_DEFINE_AUTO( ime_use_console_language, "1", FCVAR_ARCHIVE, "system keyboard starts with the language of the console and has English second, 0 - English only" );
 
 // IME languages (SceImeLanguage)
 #define IME_LANGUAGE_DANISH         0x00000001ULL
@@ -181,8 +181,10 @@ static void PS4_IME_Open( const char *text )
 	// the keyboard always starts with the system language if it's offered, English
 	// first is only possible alone; without the forced option the list is ignored
 	param.supportedLanguages = IME_LANGUAGE_ENGLISH_US;
-	if( ime_system_language.value )
+	if( ime_use_console_language.value )
 		param.supportedLanguages |= PS4_IME_SystemLanguage();
+	Con_Reportf( "IME languages: console language 0x%llx, offered 0x%llx\n",
+		(unsigned long long)PS4_IME_SystemLanguage(), (unsigned long long)param.supportedLanguages );
 	param.option = IME_OPTION_LANGUAGES_FORCED;
 	param.enterLabel = ORBIS_BUTTON_LABEL_DEFAULT;
 	param.maxTextLength = IME_MAX_TEXT;
@@ -474,8 +476,8 @@ int Platform_JoyInit( void )
 
 	Con_Reportf( "Joystick: PS4 libScePad\n" );
 
-	if( !Cvar_FindVar( ime_system_language.name ))
-		Cvar_RegisterVariable( &ime_system_language );
+	if( !Cvar_FindVar( ime_use_console_language.name ))
+		Cvar_RegisterVariable( &ime_use_console_language );
 
 	if(( ret = scePadInit( )) < 0 )
 	{
