@@ -70,10 +70,11 @@ static struct
 
 System keyboard
 
-In the console and chat Cross opens the system keyboard dialog. Menu fields open
-it themselves with the ps4_keyboard command and put their text into
-ui_textinput_text before (mainui patch): only the menu knows that a field is
-selected, text input stays enabled after leaving a field in some menus.
+The chat line opens the system keyboard dialog together with itself, in the console
+and after cancelling Cross opens it. Menu fields ask
+for it with pfnSetTextInputBuffer and pfnEnableTextInput: text input is enabled
+by the menu as soon as a field gets focus, the keyboard must open only when the
+user activates the field.
 The dialog starts with the text being edited and replaces it.
 The dialog works with UTF-16, our wchar_t is 32 bits, so buffers are uint16_t.
 
@@ -87,10 +88,11 @@ static struct
 	qboolean open;         // dialog is running
 	qboolean initialized;  // module loaded, common dialog initialized
 	qboolean seen_running; // dialog reported running at least once
+	qboolean requested;    // the menu asked for the dialog, opened on next input update
+	qboolean chat_opened;  // chat line was just opened, the dialog opens with it
+	char request_text[IME_MAX_TEXT * 4 + 1];
 	uint16_t text[IME_MAX_TEXT + 1];
 } ps4ime;
-
-static CVAR_DEFINE_AUTO( ui_textinput_text, "", FCVAR_PRIVILEGED, "text of the focused menu field, set by the menu for the system keyboard" );
 
 static CVAR_DEFINE_AUTO( ime_system_language, "0", FCVAR_ARCHIVE, "system keyboard also offers the system language; the keyboard then starts with it, not English" );
 
@@ -161,7 +163,7 @@ static qboolean PS4_IME_Init( void )
 	return true;
 }
 
-static void PS4_IME_Open( void )
+static void PS4_IME_Open( const char *text )
 {
 	static const uint16_t title[] = { 'X', 'a', 's', 'h', '3', 'D', 0 };
 	OrbisImeDialogSetting param;
@@ -172,7 +174,7 @@ static void PS4_IME_Open( void )
 		return;
 
 	sceUserServiceGetInitialUser( &user );
-	PS4_IME_FromUtf8( ps4ime.text, IME_MAX_TEXT + 1, cls.key_dest == key_menu ? ui_textinput_text.string : Con_GetEditText( ));
+	PS4_IME_FromUtf8( ps4ime.text, IME_MAX_TEXT + 1, text );
 	memset( &param, 0, sizeof( param ));
 	param.userId = user;
 	param.type = ORBIS_TYPE_DEFAULT;
@@ -314,9 +316,7 @@ static void PS4_IME_Deliver( void )
 			CL_CharEvent( ch );
 	}
 
-	if( menu )
-		Cvar_DirectSet( &ui_textinput_text, text );
-	else if( text[0] )
+	if( !menu && text[0] )
 		PS4_IME_KeyPress( K_ENTER );
 }
 
@@ -342,16 +342,30 @@ static void PS4_IME_Update( void )
 		PS4_IME_Deliver();
 }
 
-// menu fields open the keyboard with this
-static void PS4_IME_Command_f( void )
-{
-	if( !ps4ime.open )
-		PS4_IME_Open();
-}
-
 void Platform_EnableTextInput( qboolean enable, int x, int y, int w, int h )
 {
+	const char *text = Key_GetTextInputBuffer();
+	const qboolean was_wanted = ps4ime.wanted;
+
 	ps4ime.wanted = enable;
+
+	// called from the key event of the menu, the dialog is opened outside of it
+	if( !enable )
+	{
+		ps4ime.requested = false;
+		ps4ime.chat_opened = false;
+	}
+	else if( !was_wanted && cls.key_dest == key_message )
+	{
+		// the chat line has nothing to look at without the keyboard, it opens with it,
+		// the console doesn't: it's open during loading and the keyboard would cover it
+		ps4ime.chat_opened = true;
+	}
+	else if( text && !ps4ime.open )
+	{
+		ps4ime.requested = true;
+		Q_strncpy( ps4ime.request_text, text, sizeof( ps4ime.request_text ));
+	}
 }
 
 static short PS4_StickToAxis( uint8_t value )
@@ -401,6 +415,19 @@ void PS4_InputUpdate( void )
 	if( scePadReadState( ps4pad.handle, &data ) < 0 || !data.connected )
 		return;
 
+	if( ps4ime.requested )
+	{
+		ps4ime.requested = false;
+		PS4_IME_Open( ps4ime.request_text );
+	}
+
+	if( ps4ime.chat_opened )
+	{
+		ps4ime.chat_opened = false;
+		if( cls.key_dest == key_message && !ps4ime.open )
+			PS4_IME_Open( Con_GetEditText( ));
+	}
+
 	// the system keyboard has the gamepad, state is only tracked
 	if( ps4ime.open )
 	{
@@ -411,11 +438,11 @@ void PS4_InputUpdate( void )
 
 	uint32_t changed = data.buttons ^ ps4pad.buttons;
 
-	// Cross opens the system keyboard in the console and chat
+	// Cross opens the system keyboard in the console and chat again, after it was cancelled
 	if( FBitSet( changed & data.buttons, ORBIS_PAD_BUTTON_CROSS ) && ps4ime.wanted && host.textmode
 		&& ( cls.key_dest == key_console || cls.key_dest == key_message ))
 	{
-		PS4_IME_Open();
+		PS4_IME_Open( Con_GetEditText( ));
 		ps4pad.buttons = data.buttons;
 		return;
 	}
@@ -447,12 +474,8 @@ int Platform_JoyInit( void )
 
 	Con_Reportf( "Joystick: PS4 libScePad\n" );
 
-	if( !Cvar_FindVar( ui_textinput_text.name ))
-		Cvar_RegisterVariable( &ui_textinput_text );
 	if( !Cvar_FindVar( ime_system_language.name ))
 		Cvar_RegisterVariable( &ime_system_language );
-	if( !Cmd_Exists( "ps4_keyboard" ))
-		Cmd_AddCommand( "ps4_keyboard", PS4_IME_Command_f, "opens the system keyboard for the selected menu field" );
 
 	if(( ret = scePadInit( )) < 0 )
 	{

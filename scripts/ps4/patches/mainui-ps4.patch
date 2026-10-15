@@ -12,122 +12,88 @@ index bf16e4a..e335956 100644
  	// in hardware mode, it's scaled by screen width
  	// in software mode, scale must be 1.0f
  	scale = ScreenWidth / 1024.0f;
-diff --git a/controls/BaseWindow.cpp b/controls/BaseWindow.cpp
-index e18b790..5ca56ca 100644
---- a/controls/BaseWindow.cpp
-+++ b/controls/BaseWindow.cpp
-@@ -39,22 +39,27 @@ void CMenuBaseWindow::Show()
- 	// Probably not a best way
- 	// but we need to inform new window about cursor position,
- 	// otherwise we will have an invalid cursor until first mouse move event
--#if 1
-+#if !defined( __ORBIS__ )
- 	m_iCursorPrev = -1;
- 	MouseMove( uiStatic.cursorX, uiStatic.cursorY );
--#else
-+#else // PS4 has no mouse, focus first item so gamepad selection is visible
- 	m_iCursor = 0;
- 	m_iCursorPrev = 0;
-+
-+	FOR_EACH_VEC( m_pItems, i )
-+		ClearBits( m_pItems[i]->iFlags, QMF_HASKEYBOARDFOCUS|QMF_HASMOUSEFOCUS );
-+
- 	// force first available item to have focus
- 	FOR_EACH_VEC( m_pItems, i )
- 	{
--		item = m_pItems[i];
-+		CMenuBaseItem *item = m_pItems[i];
- 
- 		if( !item->IsVisible() || item->iFlags & (QMF_GRAYED|QMF_INACTIVE|QMF_MOUSEONLY))
- 			continue;
- 
- 		m_iCursorPrev = -1;
- 		SetCursor( i );
-+		SetBits( item->iFlags, QMF_HASKEYBOARDFOCUS );
- 		break;
- 	}
- #endif
 diff --git a/controls/DropDown.cpp b/controls/DropDown.cpp
-index df9a835..1ff153e 100644
+index df9a835..dea3e09 100644
 --- a/controls/DropDown.cpp
 +++ b/controls/DropDown.cpp
-@@ -81,6 +81,11 @@ int CMenuDropDown::IsNewStateByMouseClick()
+@@ -81,6 +81,10 @@ int CMenuDropDown::IsNewStateByMouseClick()
  
  bool CMenuDropDown::KeyDown( int key )
  {
-+#if defined( __ORBIS__ )
-+	// open list takes arrows for itself, they change value on key up
++	// open list takes arrows for itself, they change the value on key up
 +	if( m_isOpen && !FBitSet( iFlags, QMF_MOUSEONLY ) && ( UI::Key::IsDownArrow( key ) || UI::Key::IsUpArrow( key )))
 +		return true;
-+#endif
++
  	return false;
  }
  
-@@ -103,6 +108,14 @@ bool CMenuDropDown::KeyUp( int key )
+@@ -103,9 +107,11 @@ bool CMenuDropDown::KeyUp( int key )
  
  	if( !FBitSet( iFlags, QMF_MOUSEONLY ) )
  	{
-+#if defined( __ORBIS__ )
-+		// with gamepad arrows are used to move between items, so closed
-+		// list must not change its value, otherwise passing through filters
-+		// changes them and refreshes the server list
-+		if( !m_isOpen && ( UI::Key::IsDownArrow( key ) || UI::Key::IsUpArrow( key )))
-+			;
-+		else
-+#endif
- 		if( UI::Key::IsDownArrow( key ) )
+-		if( UI::Key::IsDownArrow( key ) )
++		// arrows move focus between items, so closed list keeps its value,
++		// otherwise just passing through it with keyboard or gamepad changes it
++		if( m_isOpen && UI::Key::IsDownArrow( key ))
  			state += 1;
- 		else if( UI::Key::IsUpArrow( key ) )
-@@ -160,6 +173,13 @@ void CMenuDropDown::Draw()
+-		else if( UI::Key::IsUpArrow( key ) )
++		else if( m_isOpen && UI::Key::IsUpArrow( key ))
+ 			state -= 1;
+ 		else if( UI::Key::IsEnter( key ) )
+ 		{
+@@ -160,6 +166,10 @@ void CMenuDropDown::Draw()
  	if( iFlags & QMF_DROPSHADOW )
  		textflags |= ETF_SHADOW;
  
-+#if defined( __ORBIS__ )
-+	// no mouse hover, show which item has gamepad focus,
-+	// same color as focused table stroke
-+	if( FBitSet( iFlags, QMF_HASKEYBOARDFOCUS|QMF_HASMOUSEFOCUS ))
++	// show which item has focus, same color as focused table stroke
++	if( IsCurrentSelected( ))
 +		borderColor = uiInputTextColor;
-+#endif
 +
  	if( m_isOpen )
  	{
  		Point pt( m_scPos.x, m_scPos.y );
-@@ -174,7 +194,12 @@ void CMenuDropDown::Draw()
+@@ -167,6 +177,9 @@ void CMenuDropDown::Draw()
+ 		if( !bDropUp )
+ 			pt.y += m_scItemSize.h;
+ 
++		// without mouse over the list, highlight the item chosen with arrows
++		bool mouseOver = UI_CursorInRect( pt.x, pt.y, m_scItemSize.w, m_scSize.h - m_scItemSize.h );
++
+ 		// all other items
+ 		UI_FillRect( pt.x, pt.y, m_scItemSize.w, m_scSize.h - m_scItemSize.h, 0xff000000 );
+ 		for( int i = 0; i < m_szNames.Count(); i++ )
+@@ -174,7 +187,9 @@ void CMenuDropDown::Draw()
  			uint textColor = iBgTextColor;
  			uint tempflags = textflags;
  
-+#if defined( __ORBIS__ )
-+			// selection is changed with gamepad arrows, not mouse
-+			if( i == m_iState )
-+#else
- 			if( UI_CursorInRect( pt, m_scItemSize ) && !(iFlags & (QMF_GRAYED|QMF_INACTIVE)))
-+#endif
+-			if( UI_CursorInRect( pt, m_scItemSize ) && !(iFlags & (QMF_GRAYED|QMF_INACTIVE)))
++			bool highlight = mouseOver ? UI_CursorInRect( pt, m_scItemSize ) : i == m_iState;
++
++			if( highlight && !(iFlags & (QMF_GRAYED|QMF_INACTIVE)))
  			{
  				UI_FillRect( pt, m_scItemSize, colorFocus );
  				tempflags |= ETF_FORCECOL;
 diff --git a/controls/Field.cpp b/controls/Field.cpp
-index d602be0..41beb4c 100644
+index d602be0..9ddeb6a 100644
 --- a/controls/Field.cpp
 +++ b/controls/Field.cpp
-@@ -142,6 +142,16 @@ bool CMenuField::KeyDown( int key )
+@@ -142,6 +142,14 @@ bool CMenuField::KeyDown( int key )
  {
  	bool handled = false;
  
-+#if defined( __ORBIS__ )
-+	// Cross opens the system keyboard, it starts with the text of this field
++	// gamepad has no keys to type, ask the engine for the system keyboard with the text of this field
 +	if( key == K_A_BUTTON )
 +	{
-+		EngFuncs::CvarSetString( "ui_textinput_text", szBuffer );
-+		EngFuncs::ClientCmd( false, "ps4_keyboard\n" );
++		EngFuncs::SetTextInputBuffer( szBuffer );
++		UI_EnableTextInput( true );
 +		return true;
 +	}
-+#endif
 +
  	// clipboard paste
  	if( UI::Key::IsInsert( key ) && EngFuncs::KEY_IsDown( K_SHIFT ))
  	{
 diff --git a/controls/Framework.cpp b/controls/Framework.cpp
-index 12d2a29..300f1d3 100644
+index 12d2a29..5c98231 100644
 --- a/controls/Framework.cpp
 +++ b/controls/Framework.cpp
 @@ -221,6 +221,8 @@ bool CMenuFramework::DrawAnimation()
@@ -135,7 +101,7 @@ index 12d2a29..300f1d3 100644
  CMenuFramework::CMenuBannerBitmap::CMenuBannerBitmap()
  {
 +	// decoration, must not take keyboard focus
-+	iFlags |= QMF_INACTIVE;
++	SetBits( iFlags, QMF_INACTIVE );
  	SetRect( UI_BANNER_POSX, UI_BANNER_POSY, UI_BANNER_WIDTH, UI_BANNER_HEIGHT );
  }
  
@@ -153,46 +119,36 @@ index 730c727..f40becb 100755
  	EngFuncs::PrecacheLogo( "logo.avi" );
  
  	float xScale, yScale;
-diff --git a/menus/Configuration.cpp b/menus/Configuration.cpp
-index 6e0a981..c7a73f3 100644
---- a/menus/Configuration.cpp
-+++ b/menus/Configuration.cpp
-@@ -61,12 +61,16 @@ void CMenuOptions::_Init( void )
- 		PC_AUDIO, UI_Audio_Menu, QMF_NOTIFY );
- 	AddButton( L( "GameUI_Video" ), L( "Change screen size, video mode and gamma" ),
- 		PC_VIDEO, UI_Video_Menu, QMF_NOTIFY );
-+#if !XASH_PS4 // no touchscreen
- 	AddButton( L( "Touch" ), L( "Change touch settings and buttons" ),
- 		PC_TOUCH, UI_Touch_Menu, QMF_NOTIFY, 't' );
-+#endif
- 	AddButton( L( "GameUI_Joystick" ), L( "Change gamepad axis and button settings" ),
- 		PC_GAMEPAD, UI_GamePad_Menu, QMF_NOTIFY, 'g' );
-+#if !XASH_PS4 // can't open web pages
- 	AddButton( L( "Update" ), L( "Check for updates" ),
- 		PC_UPDATE, msgBox.MakeOpenEvent(), QMF_NOTIFY );
-+#endif
- 	AddButton( L( "Done" ), L( "Go back to the Main menu" ),
- 		PC_DONE, VoidCb( &CMenuOptions::Hide ), QMF_NOTIFY );
- }
-diff --git a/menus/InputDevices.cpp b/menus/InputDevices.cpp
-index 331f7db..dd522a3 100644
---- a/menus/InputDevices.cpp
-+++ b/menus/InputDevices.cpp
-@@ -120,7 +120,9 @@ void CMenuInputDevices::_Init( void )
- 	//AddItem( banner );
- 	AddItem( done );
- 	AddItem( mouse );
-+#if !XASH_PS4 // no touchscreen
- 	AddItem( touch );
-+#endif
- 	AddItem( joystick );
- #ifdef __ANDROID__
- 	AddItem( evdev );
+diff --git a/enginecallback_menu.h b/enginecallback_menu.h
+index 8b765be..36326cf 100644
+--- a/enginecallback_menu.h
++++ b/enginecallback_menu.h
+@@ -502,6 +502,12 @@ public:
+ 			textfuncs.pfnSetTextInputRect( x, y, w, h );
+ 	}
+ 
++	static inline void SetTextInputBuffer( const char *text )
++	{
++		if( textfuncs.pfnSetTextInputBuffer )
++			textfuncs.pfnSetTextInputBuffer( text );
++	}
++
+ 	static inline bool GetRenderers( int num, char *sz1, size_t s1, char *sz2, size_t s2 )
+ 	{
+ 		return textfuncs.pfnGetRenderers( num, sz1, s1, sz2, s2 ) != 0;
 diff --git a/menus/ServerBrowser.cpp b/menus/ServerBrowser.cpp
-index 8dc57df..f2b23e7 100644
+index 8dc57df..14882e3 100644
 --- a/menus/ServerBrowser.cpp
 +++ b/menus/ServerBrowser.cpp
-@@ -584,6 +584,9 @@ void CMenuGameListModel::Update( void )
+@@ -574,7 +574,6 @@ void CMenuGameListModel::Update( void )
+ 
+ 	if( servers.Count() )
+ 	{
+-		parent->joinGame->SetGrayed( false );
+ 		parent->MaybeEnableFavoriteButton();
+ 		parent->OnChangeSelectedServer();
+ 		if( m_iSortingColumn != -1 )
+@@ -584,6 +583,9 @@ void CMenuGameListModel::Update( void )
  
  void CMenuGameListModel::OnActivateEntry( int line )
  {
@@ -202,24 +158,62 @@ index 8dc57df..f2b23e7 100644
  	CMenuServerBrowser::Connect( servers[line] );
  }
  
-@@ -770,7 +773,19 @@ CMenuServerBrowser::JoinGame
- */
- void CMenuServerBrowser::JoinGame()
+@@ -928,8 +930,6 @@ void CMenuServerBrowser::QueryServerList( const CUtlVector<favlist_entry_t> &lis
+ 			if( curTab == tabSwitch.GetState() && gameListModel.GetRows() == 0 )
+ 			{
+ 				gameListModel.AddServerToList( adr, fakeInfoString, list[i].favorited );
+-				joinGame->SetGrayed( false );
+-				viewGameInfo->SetGrayed( false );
+ 				MaybeEnableFavoriteButton();
+ 				OnChangeSelectedServer();
+ 			}
+@@ -1038,8 +1038,13 @@ void CMenuServerBrowser::OnTabSwitch()
+ void CMenuServerBrowser::OnChangeSelectedServer( void )
  {
--	gameListModel.OnActivateEntry( gameList.GetCurrentIndex() );
-+	int i = gameList.GetCurrentIndex();
-+
-+	// with gamepad, Join button can be pressed without selecting a server first
-+	// or list could be refreshed in the meantime
-+	if( !gameListModel.servers.IsValidIndex( i ))
-+	{
-+		if( gameListModel.servers.Count() != 1 )
-+			return;
-+
-+		i = 0;
-+	}
-+
-+	gameListModel.OnActivateEntry( i );
- }
+ 	int i = gameList.GetCurrentIndex();
++	bool selected = gameListModel.servers.IsValidIndex( i );
  
- void CMenuServerBrowser::FavoriteServer()
+-	if( !gameListModel.servers.IsValidIndex( i ))
++	// selection can be lost when the list is refreshed
++	joinGame->SetGrayed( !selected );
++	viewGameInfo->SetGrayed( !selected );
++
++	if( !selected )
+ 		return;
+ 
+ 	bool fav = gameListModel.servers[i].favorite;
+@@ -1564,8 +1569,6 @@ void CMenuServerBrowser::AddServerToList( netadr_t adr, const char *info )
+ 
+ 		// Always update visible model for LAN
+ 		gameListModel.AddServerToList( adr, info, false );
+-		joinGame->SetGrayed( false );
+-		viewGameInfo->SetGrayed( false );
+ 		MaybeEnableFavoriteButton();
+ 		OnChangeSelectedServer();
+ 		return;
+@@ -1659,9 +1662,6 @@ void CMenuServerBrowser::AddServerToList( netadr_t adr, const char *info )
+ 	if( targetTab == curTabVisible )
+ 	{
+ 		gameListModel.AddServerToList( adr, info, is_favorite );
+-
+-		joinGame->SetGrayed( false );
+-		viewGameInfo->SetGrayed( false );
+ 		MaybeEnableFavoriteButton();
+ 		OnChangeSelectedServer();
+ 	}
+diff --git a/sdk_includes/engine/menu_int.h b/sdk_includes/engine/menu_int.h
+index ffa4ace..a83a58a 100644
+--- a/sdk_includes/engine/menu_int.h
++++ b/sdk_includes/engine/menu_int.h
+@@ -234,6 +234,11 @@ typedef struct ui_extendedfuncs_s {
+ 	// engine tries to keep this rect visible, when the on-screen keyboard covers the screen
+ 	// must be called before pfnEnableTextInput( true ), empty rect means the whole screen
+ 	void (*pfnSetTextInputRect)( int x, int y, int w, int h );
++
++	// asks the engine to open the system keyboard with this text, on platforms that have one,
++	// on the next pfnEnableTextInput( true ), even if text input is enabled already
++	// it's used when user activates the text field, for example with gamepad
++	void (*pfnSetTextInputBuffer)( const char *text );
+ } ui_extendedfuncs_t;
+ 
+ // deprecated export from old engine
