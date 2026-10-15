@@ -94,52 +94,12 @@ static struct
 	uint16_t text[IME_MAX_TEXT + 1];
 } ps4ime;
 
-static CVAR_DEFINE_AUTO( ime_use_console_language, "1", FCVAR_ARCHIVE, "system keyboard starts with the language of the console and has English second, 0 - English only" );
+static CVAR_DEFINE_AUTO( ime_use_console_language, "1", FCVAR_ARCHIVE, "system keyboard has the language of the console first and English after it, 0 - English only" );
 
-// IME languages (SceImeLanguage)
-#define IME_LANGUAGE_DANISH         0x00000001ULL
-#define IME_LANGUAGE_GERMAN         0x00000002ULL
+// SceImeLanguage
 #define IME_LANGUAGE_ENGLISH_US     0x00000004ULL
-#define IME_LANGUAGE_SPANISH        0x00000008ULL
-#define IME_LANGUAGE_FRENCH         0x00000010ULL
-#define IME_LANGUAGE_ITALIAN        0x00000020ULL
-#define IME_LANGUAGE_DUTCH          0x00000040ULL
-#define IME_LANGUAGE_NORWEGIAN      0x00000080ULL
-#define IME_LANGUAGE_POLISH         0x00000100ULL
-#define IME_LANGUAGE_PORTUGUESE_PT  0x00000200ULL
-#define IME_LANGUAGE_RUSSIAN        0x00000400ULL
-#define IME_LANGUAGE_FINNISH        0x00000800ULL
-#define IME_LANGUAGE_SWEDISH        0x00001000ULL
-#define IME_LANGUAGE_JAPANESE       0x00002000ULL
-#define IME_LANGUAGE_KOREAN         0x00004000ULL
-#define IME_LANGUAGE_CHINESE_S      0x00008000ULL
-#define IME_LANGUAGE_CHINESE_T      0x00010000ULL
-#define IME_LANGUAGE_PORTUGUESE_BR  0x00020000ULL
-#define IME_LANGUAGE_TURKISH        0x00080000ULL
-#define IME_LANGUAGE_SPANISH_LA     0x00100000ULL
 
 #define IME_OPTION_LANGUAGES_FORCED 0x00000008
-
-#define SYSTEM_SERVICE_PARAM_ID_LANG 1
-
-// system language (SceSystemParamLang) to its keyboard language
-static uint64_t PS4_IME_SystemLanguage( void )
-{
-	static const uint64_t langs[] =
-	{
-		IME_LANGUAGE_JAPANESE, 0, IME_LANGUAGE_FRENCH, IME_LANGUAGE_SPANISH, IME_LANGUAGE_GERMAN,
-		IME_LANGUAGE_ITALIAN, IME_LANGUAGE_DUTCH, IME_LANGUAGE_PORTUGUESE_PT, IME_LANGUAGE_RUSSIAN, IME_LANGUAGE_KOREAN,
-		IME_LANGUAGE_CHINESE_T, IME_LANGUAGE_CHINESE_S, IME_LANGUAGE_FINNISH, IME_LANGUAGE_SWEDISH, IME_LANGUAGE_DANISH,
-		IME_LANGUAGE_NORWEGIAN, IME_LANGUAGE_POLISH, IME_LANGUAGE_PORTUGUESE_BR, 0, IME_LANGUAGE_TURKISH,
-		IME_LANGUAGE_SPANISH_LA, 0, IME_LANGUAGE_FRENCH,
-	};
-	int32_t lang = -1;
-
-	if( sceSystemServiceParamGetInt( SYSTEM_SERVICE_PARAM_ID_LANG, &lang ) < 0 || lang < 0 || lang >= (int)ARRAYSIZE( langs ))
-		return 0;
-
-	return langs[lang];
-}
 
 static void PS4_SendAxis( engineAxis_t axis, short value );
 static void PS4_IME_FromUtf8( uint16_t *out, size_t size, const char *in );
@@ -178,14 +138,13 @@ static void PS4_IME_Open( const char *text )
 	memset( &param, 0, sizeof( param ));
 	param.userId = user;
 	param.type = ORBIS_TYPE_DEFAULT;
-	// the keyboard always starts with the system language if it's offered, English
-	// first is only possible alone; without the forced option the list is ignored
-	param.supportedLanguages = IME_LANGUAGE_ENGLISH_US;
-	if( ime_use_console_language.value )
-		param.supportedLanguages |= PS4_IME_SystemLanguage();
-	Con_Reportf( "IME languages: console language 0x%llx, offered 0x%llx\n",
-		(unsigned long long)PS4_IME_SystemLanguage(), (unsigned long long)param.supportedLanguages );
-	param.option = IME_OPTION_LANGUAGES_FORCED;
+	// without a list the keyboard has the language of the console first and English
+	// after it, with the list it has only the listed languages
+	if( !ime_use_console_language.value )
+	{
+		param.supportedLanguages = IME_LANGUAGE_ENGLISH_US;
+		param.option = IME_OPTION_LANGUAGES_FORCED;
+	}
 	param.enterLabel = ORBIS_BUTTON_LABEL_DEFAULT;
 	param.maxTextLength = IME_MAX_TEXT;
 	param.inputTextBuffer = (wchar_t *)ps4ime.text;
