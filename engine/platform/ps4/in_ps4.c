@@ -436,14 +436,7 @@ static void PS4_PadUpdate( void )
 
 void Platform_RunEvents( void )
 {
-	// finds freezes: a frame that took too long is written to the log (developer 1 or higher),
-	// what was loaded or happened right before this line is the reason
-	static double last_time = 0.0;
-	const double now = Sys_DoubleTime( );
-
-	if( last_time > 0.0 && now - last_time > 0.15 )
-		Con_Reportf( "PS4: slow frame, %.0f ms since the previous one\n", ( now - last_time ) * 1000.0 );
-	last_time = now;
+	// frame stalls are found by the watchdog (-ps4watchdog), see crash_ps4.c
 	PS4_FrameHeartbeat( );
 
 	// the system keyboard takes the keyboard and the mouse is of no use while it is open
