@@ -212,20 +212,52 @@ static void PS4_WatchdogSignal( int sig, siginfo_t *si, void *context )
 	PS4_Log( "*** WATCHDOG: end ***\n" );
 }
 
+// the engine thread tells that a frame has started, the watchdog looks for frames that take too long
+static volatile uint64_t ps4_last_frame_time;
+
+void PS4_FrameHeartbeat( void )
+{
+	ps4_last_frame_time = sceKernelGetProcessTime( );
+}
+
+#define PS4_WATCHDOG_FRAME_USEC  ( 250 * 1000 )
+#define PS4_WATCHDOG_MAX_DUMPS   40
+
 static void *PS4_WatchdogThread( void *arg )
 {
-	while( 1 )
-	{
-		sceKernelUsleep( 1000 * 1000 );
+	uint64_t reported_frame = 0;
+	int dumps = 0;
+	qboolean startup_reported = false;
 
-		if( !ps4_engine_thread_valid || !ps4_last_log_time )
+	while( dumps < PS4_WATCHDOG_MAX_DUMPS )
+	{
+		sceKernelUsleep( 50 * 1000 );
+
+		if( !ps4_engine_thread_valid )
 			continue;
 
-		if( sceKernelGetProcessTime( ) - ps4_last_log_time > PS4_WATCHDOG_USEC )
+		const uint64_t now = sceKernelGetProcessTime( );
+		const uint64_t frame = ps4_last_frame_time;
+
+		// before the first frame: the engine is starting, it's stuck if it prints nothing
+		if( !frame )
 		{
-			PS4_Log( "watchdog: no output for %d seconds\n", PS4_WATCHDOG_USEC / 1000000 );
+			if( !startup_reported && ps4_last_log_time && now - ps4_last_log_time > PS4_WATCHDOG_USEC )
+			{
+				PS4_Log( "watchdog: no output for %d seconds\n", PS4_WATCHDOG_USEC / 1000000 );
+				pthread_kill( ps4_engine_thread, PS4_SIGUSR1 );
+				startup_reported = true;
+			}
+			continue;
+		}
+
+		// the frame is late: one dump for each stall shows what the engine thread is waiting for
+		if( frame != reported_frame && now - frame > PS4_WATCHDOG_FRAME_USEC )
+		{
+			PS4_Log( "watchdog: no new frame for %d ms\n", (int)(( now - frame ) / 1000 ));
 			pthread_kill( ps4_engine_thread, PS4_SIGUSR1 );
-			break; // only once, it's a diagnostic
+			reported_frame = frame;
+			dumps++;
 		}
 	}
 
@@ -265,7 +297,7 @@ void PS4_StartWatchdog( void )
 	ps4_engine_thread = pthread_self( );
 	ps4_engine_thread_valid = true;
 
-	// diagnostic for hangs during startup, enabled with -ps4watchdog in xash3d.cmdline
+	// diagnostic for hangs and stalls, enabled with -ps4watchdog in xash3d.cmdline
 	if( ps4_watchdog_enabled && pthread_create( &watchdog, NULL, PS4_WatchdogThread, NULL ) == 0 )
 		pthread_detach( watchdog );
 }

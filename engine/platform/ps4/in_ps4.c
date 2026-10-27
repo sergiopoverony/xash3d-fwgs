@@ -444,6 +444,7 @@ void Platform_RunEvents( void )
 	if( last_time > 0.0 && now - last_time > 0.15 )
 		Con_Reportf( "PS4: slow frame, %.0f ms since the previous one\n", ( now - last_time ) * 1000.0 );
 	last_time = now;
+	PS4_FrameHeartbeat( );
 
 	// the system keyboard takes the keyboard and the mouse is of no use while it is open
 	if( !ps4ime.open )
