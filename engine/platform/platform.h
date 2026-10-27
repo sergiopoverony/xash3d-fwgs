@@ -161,6 +161,7 @@ void PS4_InitKeyboard( void );
 qboolean PS4_PackageLibraryExists( const char *name );
 void PS4_FramePresented( void );
 void PS4_FrameHeartbeat( void );
+void PS4_PresentHeartbeat( void );
 void PS4_AllowHideSplash( void );
 #endif
 

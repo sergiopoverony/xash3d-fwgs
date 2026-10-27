@@ -214,10 +214,23 @@ static void PS4_WatchdogSignal( int sig, siginfo_t *si, void *context )
 
 // the engine thread tells that a frame has started, the watchdog looks for frames that take too long
 static volatile uint64_t ps4_last_frame_time;
+static volatile uint64_t ps4_frame_count, ps4_present_count, ps4_longest_frame;
 
 void PS4_FrameHeartbeat( void )
 {
-	ps4_last_frame_time = sceKernelGetProcessTime( );
+	const uint64_t now = sceKernelGetProcessTime( );
+
+	if( ps4_last_frame_time && now - ps4_last_frame_time > ps4_longest_frame )
+		ps4_longest_frame = now - ps4_last_frame_time;
+
+	ps4_last_frame_time = now;
+	ps4_frame_count++;
+}
+
+// a frame went to the screen
+void PS4_PresentHeartbeat( void )
+{
+	ps4_present_count++;
 }
 
 #define PS4_WATCHDOG_FRAME_USEC  ( 250 * 1000 )
@@ -228,10 +241,29 @@ static void *PS4_WatchdogThread( void *arg )
 	uint64_t reported_frame = 0;
 	int dumps = 0;
 	qboolean startup_reported = false;
+	uint64_t stats_frames = 0, stats_present = 0;
+	int ticks = 0;
 
-	while( dumps < PS4_WATCHDOG_MAX_DUMPS )
+	while( 1 )
 	{
 		sceKernelUsleep( 50 * 1000 );
+
+		// every 5 seconds: if the game seems frozen, this tells whether the engine still runs
+		// and whether the frames still go to the screen
+		if( ++ticks >= 100 )
+		{
+			const uint64_t frames = ps4_frame_count, present = ps4_present_count;
+
+			ticks = 0;
+			if( ps4_last_frame_time )
+			{
+				PS4_Log( "watchdog: 5 s: %d frames run, %d presented, longest frame %d ms\n",
+					(int)( frames - stats_frames ), (int)( present - stats_present ), (int)( ps4_longest_frame / 1000 ));
+			}
+			stats_frames = frames;
+			stats_present = present;
+			ps4_longest_frame = 0;
+		}
 
 		if( !ps4_engine_thread_valid )
 			continue;
@@ -252,7 +284,7 @@ static void *PS4_WatchdogThread( void *arg )
 		}
 
 		// the frame is late: one dump for each stall shows what the engine thread is waiting for
-		if( frame != reported_frame && now - frame > PS4_WATCHDOG_FRAME_USEC )
+		if( dumps < PS4_WATCHDOG_MAX_DUMPS && frame != reported_frame && now - frame > PS4_WATCHDOG_FRAME_USEC )
 		{
 			PS4_Log( "watchdog: no new frame for %d ms\n", (int)(( now - frame ) / 1000 ));
 			pthread_kill( ps4_engine_thread, PS4_SIGUSR1 );

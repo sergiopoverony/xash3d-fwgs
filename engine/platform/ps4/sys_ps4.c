@@ -426,6 +426,8 @@ void PS4_AllowHideSplash( void )
 
 void PS4_FramePresented( void )
 {
+	PS4_PresentHeartbeat( );
+
 	int ret;
 
 	if( ps4_splash_frames <= 0 || --ps4_splash_frames > 0 )
